@@ -1,7 +1,7 @@
 /*
  * DoS Protect for Left 4 Dead and Left 4 Dead 2
- * Current maintenance: Kussun
  * Based on the original DoS Protect by ZombieX2.net
+ * Rewrite: Kussun
  */
 
 #include "extension.h"
@@ -587,7 +587,7 @@ bool DoSProtect::RegisterConCommandBase(ConCommandBase *pCommandBase)
 
 const char *DoSProtect::GetLicense()
 {
-    return "Unspecified";
+    return "";
 }
 
 const char *DoSProtect::GetVersion()
