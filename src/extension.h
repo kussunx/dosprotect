@@ -1,7 +1,7 @@
 #ifndef _INCLUDE_METAMOD_SOURCE_DOSPROTECT_MAIN_H
 #define _INCLUDE_METAMOD_SOURCE_DOSPROTECT_MAIN_H
 
-#define DOSP_VERSION "2.0.0-dev.2"
+#define DOSP_VERSION "2.0.0-dev.3"
 
 #include "platform_wrappers.h"
 
