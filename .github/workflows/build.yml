@@ -1,0 +1,45 @@
+name: Build L4D1 Win32
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dosprotect-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: L4D1 / Windows x86
+    runs-on:
+      - self-hosted
+      - dosprotect
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify legacy mitigation
+        shell: powershell
+        run: .\scripts\verify-legacy-mitigation.ps1
+
+      - name: Build and package
+        shell: powershell
+        run: .\scripts\build.ps1
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: dosprotect-l4d-win32
+          path: artifacts/dosprotect-l4d-win32/**
+          if-no-files-found: error
+          retention-days: 14
