@@ -1,24 +1,13 @@
 # Changelog
 
-## 2.0.0-dev.4
+## 2.0.0
 
-- `DROP-WOULDBLOCK` is now the only mitigation path after successful runtime validation on both Left 4 Dead and Left 4 Dead 2.
-- Removed the old `LEGACY-25` fallback, its selector ConVar and legacy-only telemetry.
-- Reduced hot-path overhead by sharing one monotonic timestamp across each drained burst and moving expiry/PPS maintenance out of the per-datagram accounting function.
-- Made PPS calculation use the actual elapsed window instead of whole-second truncation.
-- Increased source-expiry maintenance interval to reduce attack-path work.
-- Fixed hook-chain handling so disable/unload refuses to break a later recvfrom hook.
-- Simplified the build checks, CI workflow and public documentation.
-- Removed obsolete compatibility scaffolding and development-only regression documentation.
-
-## 2.0.0-dev.3
-
-- Introduced the bounded `DROP-WOULDBLOCK` mitigation.
-- Added configurable drain budget and drain-budget telemetry.
-- Added runtime source tracking, expiration, PPS statistics and diagnostics.
-- Added separate L4D1 and L4D2 Win32 binaries and packages.
-
-## 2.0.0-dev.1 / dev.2
-
-- Established the dual-game build baseline.
-- Modernized source tracking and hook lifecycle around the original plugin behavior.
+- Reworked the original recvfrom mitigation around the bounded `DROP-WOULDBLOCK` path and validated it on dedicated Left 4 Dead and Left 4 Dead 2 servers.
+- Added separate Win32/x86 binaries and packages for L4D1 and L4D2.
+- Added bounded draining of consecutive zero-length UDP datagrams without fabricating packet lengths for the engine.
+- Added source tracking, expiry, PPS statistics and runtime diagnostics.
+- Added configurable drain budget and bounded source telemetry.
+- Hardened recvfrom hook installation and removal so the plugin does not break a later hook in the chain.
+- Reduced hot-path work during bursts and corrected PPS calculation to use the actual elapsed window.
+- Added reproducible builds with pinned Metamod:Source and HL2SDK revisions.
+- Removed the old `LEGACY-25` path and obsolete compatibility code.
