@@ -1,19 +1,12 @@
 #ifndef _INCLUDE_METAMOD_SOURCE_DOSPROTECT_MAIN_H
 #define _INCLUDE_METAMOD_SOURCE_DOSPROTECT_MAIN_H
 
-#define DOSP_VERSION "2.0.0-dev.1"
+#define DOSP_VERSION "2.0.0-dev.2"
 
 #include "platform_wrappers.h"
 
 #include <ISmmPlugin.h>
 #include "tier0/vcrmode.h"
-#include <sh_list.h>
-
-struct DoSCount
-{
-    int ip[4];
-    unsigned int count;
-};
 
 class DoSProtect :
     public ISmmPlugin,
