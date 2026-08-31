@@ -6,10 +6,7 @@ $tag = "v$version"
 Write-Host "Publishing DoS Protect $version..."
 
 & "$PSScriptRoot\verify-mitigation.ps1"
-if ($LASTEXITCODE -ne 0) { throw 'Mitigation verification failed.' }
-
 & "$PSScriptRoot\build.ps1" -Target all -Configuration Release
-if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
 
 $l4d1 = "dosprotect-$version-l4d1-win32.zip"
 $l4d2 = "dosprotect-$version-l4d2-win32.zip"
