@@ -1,3 +1,8 @@
+/*
+ * DoS Protect - Left 4 Dead DoS protection plugin
+ * Revamp and current maintenance: Kussun
+ * Based on the original DoS Protect by ZombieX2.net
+ */
 
 #include "extension.h"
 
@@ -187,12 +192,12 @@ const char *DoSProtect::GetLogTag()
 
 const char *DoSProtect::GetAuthor()
 {
-	return "ZombieX2.net";
+	return "Kussun";
 }
 
 const char *DoSProtect::GetDescription()
 {
-	return "Prevent DoS attack cause server lag";
+	return "Left 4 Dead DoS protection revamp; based on the original DoS Protect by ZombieX2.net";
 }
 
 const char *DoSProtect::GetName()
@@ -202,5 +207,5 @@ const char *DoSProtect::GetName()
 
 const char *DoSProtect::GetURL()
 {
-	return "http://www.ZombieX2.net/";
+	return "https://github.com/kussunx/dosprotect";
 }
