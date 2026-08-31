@@ -15,7 +15,7 @@ $Source = Get-Content -Raw -Path $SourcePath
 $Pattern = '(?s)int\s+MyRecvFromHook\s*\([^)]*\).*?g_real_recvfrom_ptr\s*\([^;]+;.*?if\s*\(\s*ret\s*==\s*0\s*\).*?return\s+25\s*;'
 
 if ($Source -notmatch $Pattern) {
-    throw 'Regression guard failed: legacy L4D recvfrom mitigation (ret == 0 -> return 25) is missing or structurally changed.'
+    throw 'Regression guard failed: legacy L4D/L4D2 recvfrom mitigation (ret == 0 -> return 25) is missing or structurally changed.'
 }
 
-Write-Host 'Legacy mitigation regression guard: OK (ret == 0 -> return 25 preserved).'
+Write-Host 'Legacy L4D/L4D2 mitigation regression guard: OK (ret == 0 -> return 25 preserved).'
