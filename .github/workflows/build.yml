@@ -51,6 +51,11 @@ jobs:
         shell: cmd
         run: type artifacts\dosprotect-${{ matrix.target }}-win32\build-info.txt
 
+      - name: Deliver dev.3 to C:\L4D-DEV\dosprotect
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy-local-temp.ps1 -Target ${{ matrix.target }}
+
       - name: Upload package (best effort)
         continue-on-error: true
         uses: actions/upload-artifact@v4
