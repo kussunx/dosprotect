@@ -95,7 +95,9 @@ artifacts/dosprotect-l4d-win32/
 
 The workflow targets `self-hosted` without requiring the runner name to also be configured as a custom label. On this repository the intended runner is the Dev VM runner named `dosprotect`; `scripts/build.ps1` additionally rejects non-Windows hosts.
 
-It runs on pushes to `main`, pull requests targeting `main`, and manual `workflow_dispatch` runs. Successful runs upload `dosprotect-l4d-win32` as a GitHub Actions artifact.
+It runs on pushes to `main`, pull requests targeting `main`, and manual `workflow_dispatch` runs. The package is uploaded as the `dosprotect-l4d-win32` Actions artifact when GitHub artifact storage is available. Artifact-quota exhaustion is treated as a storage/infrastructure warning and does not invalidate a successful compile, link, x86 validation or SHA-256 calculation; build metadata remains visible in the workflow log.
+
+When an in-repository pull request is merged, the workflow also removes its merged head branch automatically to keep the repository clean.
 
 ## Regression guard
 
