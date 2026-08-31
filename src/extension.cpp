@@ -4,12 +4,12 @@
  * Based on the original DoS Protect by ZombieX2.net
  *
  * Mitigation policy:
- * Zero-length UDP datagrams are consumed by the real recvfrom() call and then
- * suppressed before they reach the Source engine packet parser. The default
- * modern mode reports "no deliverable packet right now" through the standard
- * non-blocking socket result (SOCKET_ERROR + WSAEWOULDBLOCK on Windows).
- * LEGACY-25 remains available as a runtime fallback while the modern path is
- * validated against the known L4D/L4D2 regression case.
+ * Zero-length UDP datagrams are consumed and suppressed before they reach the
+ * Source engine packet parser. Modern mode drains queued zero-length datagrams
+ * with a bounded receive loop, forwards the first real packet unchanged, and
+ * reports the normal non-blocking "no packet available" result when there is
+ * nothing deliverable. LEGACY-25 remains available as a runtime fallback while
+ * the modern path is validated on L4D1 and L4D2.
  */
 
 #include "extension.h"
@@ -52,6 +52,9 @@ constexpr int kMaintenanceIntervalSeconds = 5;
 constexpr int kLegacy25Mode = 0;
 constexpr int kModernDropMode = 1;
 constexpr int kDefaultMitigationMode = kModernDropMode;
+constexpr int kDefaultDrainBudget = 256;
+constexpr int kMinDrainBudget = 1;
+constexpr int kMaxDrainBudget = 4096;
 constexpr size_t kStatusTopLimit = 10;
 constexpr size_t kTopCommandLimit = 20;
 
@@ -67,6 +70,7 @@ struct DoSStats
     uint64_t totalIntercepted = 0;
     uint64_t modernDrops = 0;
     uint64_t legacy25Responses = 0;
+    uint64_t drainBudgetHits = 0;
     uint64_t invalidSourcePackets = 0;
     uint64_t untrackedSourcePackets = 0;
     uint64_t expiredRecords = 0;
@@ -101,6 +105,7 @@ struct RankedRecord
 ICvar *g_icvar = nullptr;
 ConVar *g_dospEnable = nullptr;
 ConVar *g_dospMitigationMode = nullptr;
+ConVar *g_dospDrainBudget = nullptr;
 ConVar *g_dospMaxSources = nullptr;
 ConVar *g_dospExpireSeconds = nullptr;
 
@@ -111,6 +116,7 @@ TimePoint g_nextMaintenance = Clock::now();
 bool g_recvfromHooked = false;
 RecvFromFn g_realRecvFrom = nullptr;
 int g_effectiveMitigationMode = kDefaultMitigationMode;
+int g_effectiveDrainBudget = kDefaultDrainBudget;
 int g_effectiveMaxSources = kDefaultMaxSources;
 int g_effectiveExpireSeconds = kDefaultExpireSeconds;
 
@@ -137,6 +143,15 @@ void RefreshRuntimeConfig()
     else
     {
         g_effectiveMitigationMode = kDefaultMitigationMode;
+    }
+
+    if (g_dospDrainBudget)
+    {
+        g_effectiveDrainBudget = ClampInt(g_dospDrainBudget->GetInt(), kMinDrainBudget, kMaxDrainBudget);
+    }
+    else
+    {
+        g_effectiveDrainBudget = kDefaultDrainBudget;
     }
 
     if (g_dospMaxSources)
@@ -271,28 +286,71 @@ void RecordZeroDatagram(const struct sockaddr *from, const int *fromlen)
 void SetNoDeliverableDatagramError()
 {
 #if defined PLATFORM_WINDOWS
-    // The zero-length datagram has already been consumed. Expose the same
-    // contract a non-blocking recvfrom() uses when there is no packet for the
-    // caller to process, instead of fabricating a positive byte count.
     WSASetLastError(WSAEWOULDBLOCK);
 #elif defined PLATFORM_POSIX
     errno = EAGAIN;
 #endif
 }
 
-int HandleZeroDatagram(const struct sockaddr *from, const int *fromlen)
+bool SocketReadableNow(int socketHandle)
 {
-    RecordZeroDatagram(from, fromlen);
+    fd_set readSet;
+    FD_ZERO(&readSet);
+#if defined PLATFORM_WINDOWS
+    FD_SET(static_cast<SOCKET>(socketHandle), &readSet);
+    timeval timeout{};
+    const int result = select(0, &readSet, nullptr, nullptr, &timeout);
+#else
+    FD_SET(socketHandle, &readSet);
+    timeval timeout{};
+    const int result = select(socketHandle + 1, &readSet, nullptr, nullptr, &timeout);
+#endif
+    return result > 0;
+}
 
-    if (g_effectiveMitigationMode == kLegacy25Mode)
+int HandleModernZeroDatagrams(
+    int s,
+    char *buf,
+    int len,
+    int flags,
+    struct sockaddr *from,
+    int *fromlen,
+    int addressCapacity)
+{
+    int drained = 0;
+
+    while (true)
     {
-        ++g_stats.legacy25Responses;
-        return 25;
-    }
+        RecordZeroDatagram(from, fromlen);
+        ++g_stats.modernDrops;
+        ++drained;
 
-    ++g_stats.modernDrops;
-    SetNoDeliverableDatagramError();
-    return SOCKET_ERROR;
+        if (drained >= g_effectiveDrainBudget)
+        {
+            ++g_stats.drainBudgetHits;
+            SetNoDeliverableDatagramError();
+            return SOCKET_ERROR;
+        }
+
+        if (!SocketReadableNow(s))
+        {
+            SetNoDeliverableDatagramError();
+            return SOCKET_ERROR;
+        }
+
+        if (fromlen)
+        {
+            *fromlen = addressCapacity;
+        }
+
+        const int ret = g_realRecvFrom(s, buf, len, flags, from, fromlen);
+        if (ret == 0)
+        {
+            continue;
+        }
+
+        return ret;
+    }
 }
 
 uint64_t SecondsSince(const TimePoint now, const TimePoint then)
@@ -360,13 +418,21 @@ int MyRecvFromHook(int s, char *buf, int len, int flags, struct sockaddr *from, 
     if (!g_realRecvFrom)
         return SOCKET_ERROR;
 
+    const int addressCapacity = fromlen ? *fromlen : 0;
     const int ret = g_realRecvFrom(s, buf, len, flags, from, fromlen);
-    if (ret == 0)
+    if (ret != 0)
     {
-        return HandleZeroDatagram(from, fromlen);
+        return ret;
     }
 
-    return ret;
+    if (g_effectiveMitigationMode == kLegacy25Mode)
+    {
+        RecordZeroDatagram(from, fromlen);
+        ++g_stats.legacy25Responses;
+        return 25;
+    }
+
+    return HandleModernZeroDatagrams(s, buf, len, flags, from, fromlen, addressCapacity);
 }
 
 bool ReHookRecvFrom()
@@ -426,9 +492,11 @@ void dosp_status_CommandCallback()
     META_CONPRINTF(" Status: %s\n", g_recvfromHooked ? "ENABLED" : "DISABLED");
     META_CONPRINTF(" Mitigation: %s\n", MitigationModeName());
     META_CONPRINT(" Legacy fallback: available (dosp_mitigation_mode 0)\n");
+    META_CONPRINTF(" Drain budget: %d zero datagrams/call\n", g_effectiveDrainBudget);
     META_CONPRINTF(" Total zero UDP intercepted: %llu\n", static_cast<unsigned long long>(g_stats.totalIntercepted));
     META_CONPRINTF(" Modern drops: %llu\n", static_cast<unsigned long long>(g_stats.modernDrops));
     META_CONPRINTF(" Legacy-25 responses: %llu\n", static_cast<unsigned long long>(g_stats.legacy25Responses));
+    META_CONPRINTF(" Drain budget hits: %llu\n", static_cast<unsigned long long>(g_stats.drainBudgetHits));
     META_CONPRINTF(" Tracked sources: %llu / %d\n", static_cast<unsigned long long>(g_attackers.size()), g_effectiveMaxSources);
     META_CONPRINTF(" Invalid/unavailable source packets: %llu\n", static_cast<unsigned long long>(g_stats.invalidSourcePackets));
     META_CONPRINTF(" Packets not tracked because table was full: %llu\n", static_cast<unsigned long long>(g_stats.untrackedSourcePackets));
@@ -478,7 +546,7 @@ void OnDoSPConVarChange(ConVar *var, const char *pOldValue, float flOldValue)
         return;
     }
 
-    if (var == g_dospMitigationMode || var == g_dospMaxSources || var == g_dospExpireSeconds)
+    if (var == g_dospMitigationMode || var == g_dospDrainBudget || var == g_dospMaxSources || var == g_dospExpireSeconds)
     {
         const int previousMode = g_effectiveMitigationMode;
         RefreshRuntimeConfig();
@@ -507,6 +575,7 @@ bool DoSProtect::Load(PluginId id, ISmmAPI *ismm, char *error, size_t maxlen, bo
     new ConVar("dosp_version", DOSP_VERSION, FCVAR_SPONLY | FCVAR_REPLICATED | FCVAR_NOTIFY, "DoS Protect version");
     g_dospEnable = new ConVar("dosp_enable", "1", 0, "1 = enable DoS Protect, 0 = disable DoS Protect");
     g_dospMitigationMode = new ConVar("dosp_mitigation_mode", "1", 0, "Zero-length UDP handling: 1 = modern DROP-WOULDBLOCK (default), 0 = LEGACY-25 fallback");
+    g_dospDrainBudget = new ConVar("dosp_drain_budget", "256", 0, "Maximum zero-length UDP datagrams drained in one recvfrom hook call (effective range 1-4096)");
     g_dospMaxSources = new ConVar("dosp_max_sources", "4096", 0, "Maximum IPv4 source records retained in memory (effective range 128-65536)");
     g_dospExpireSeconds = new ConVar("dosp_expire_seconds", "900", 0, "Expire inactive source records after N seconds; 0 disables expiry");
 
