@@ -131,7 +131,9 @@ Every push to `main`, pull request targeting `main`, or manual workflow run buil
 - `dosprotect-l4d-win32`
 - `dosprotect-l4d2-win32`
 
-Each artifact contains the appropriate game-specific DLL packaged under the same Metamod install layout.
+Each package contains the appropriate game-specific DLL under the same Metamod install layout.
+
+The upload to GitHub Actions artifact storage is **best effort**. A storage-quota failure does not invalidate a successful compile, link, x86 validation or SHA-256 calculation; those results remain visible in the workflow log and the package remains in the self-hosted runner workspace for the duration of that job. Once GitHub artifact storage is available again, the same workflow will upload both packages normally.
 
 Merged in-repository pull request branches are automatically removed by the workflow to keep the repository clean.
 
