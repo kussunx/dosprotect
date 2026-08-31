@@ -62,12 +62,12 @@ function Ensure-Checkout {
 }
 
 function Import-VsDevEnvironment {
-    $Candidates = @(
+    $Candidates = @(@(
         (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'),
         (Join-Path $env:ProgramFiles 'Microsoft Visual Studio\Installer\vswhere.exe')
-    ) | Where-Object { $_ -and (Test-Path $_) }
+    ) | Where-Object { $_ -and (Test-Path $_) })
 
-    if (-not $Candidates) {
+    if ($Candidates.Count -eq 0) {
         throw 'vswhere.exe was not found. Install Visual Studio with Desktop development with C++.'
     }
 
