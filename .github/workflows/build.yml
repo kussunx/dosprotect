@@ -1,0 +1,78 @@
+name: Build L4D1 Win32
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dosprotect-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
+    name: L4D1 / Windows x86
+    runs-on: self-hosted
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Verify legacy mitigation
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-legacy-mitigation.ps1
+
+      - name: Build and package
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
+
+      - name: Report build metadata
+        shell: cmd
+        run: type artifacts\dosprotect-l4d-win32\build-info.txt
+
+      - name: Upload package (best effort)
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: dosprotect-l4d-win32
+          path: artifacts/dosprotect-l4d-win32/**
+          if-no-files-found: error
+          retention-days: 14
+
+  cleanup-merged-branch:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    name: Delete merged branch
+    runs-on: self-hosted
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Delete merged head branch
+        shell: cmd
+        env:
+          MERGED_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: git push origin --delete "%MERGED_BRANCH%" || echo Branch was already removed.
