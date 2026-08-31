@@ -1,14 +1,18 @@
 /*
- * DoS Protect - Left 4 Dead DoS protection plugin
+ * DoS Protect - Left 4 Dead / Left 4 Dead 2 DoS protection plugin
  * Revamp and current maintenance: Kussun
  * Based on the original DoS Protect by ZombieX2.net
  *
  * Compatibility note:
  * The legacy recvfrom() mitigation (ret == 0 -> return 25) is intentionally
- * preserved because it is a regression-sensitive behavior for L4D1.
+ * preserved because it is regression-sensitive behavior for L4D and L4D2.
  */
 
 #include "extension.h"
+
+#if SOURCE_ENGINE != SE_LEFT4DEAD && SOURCE_ENGINE != SE_LEFT4DEAD2
+#error DoS Protect revamp currently supports only Left 4 Dead and Left 4 Dead 2.
+#endif
 
 #if SOURCE_ENGINE >= 3
 #define CallGlobalChangeCallback CallGlobalChangeCallbacks
@@ -206,7 +210,7 @@ const char *DoSProtect::GetAuthor()
 
 const char *DoSProtect::GetDescription()
 {
-    return "Left 4 Dead DoS protection revamp; based on the original DoS Protect by ZombieX2.net";
+    return "L4D/L4D2 DoS protection revamp; based on the original DoS Protect by ZombieX2.net";
 }
 
 const char *DoSProtect::GetName()
