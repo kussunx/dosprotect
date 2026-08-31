@@ -22,6 +22,29 @@ if (-not (Test-Path $LocalRepo)) {
     New-Item -ItemType Directory -Force $LocalRepo | Out-Null
 }
 
+$GitDir = Join-Path $LocalRepo '.git'
+if (Test-Path $GitDir) {
+    $TrackedDirty = @(& git -C $LocalRepo status --porcelain --untracked-files=no)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unable to inspect the local C:\L4D-DEV\dosprotect clone.'
+    }
+
+    if ($TrackedDirty.Count -eq 0) {
+        & git -C $LocalRepo fetch origin main
+        if ($LASTEXITCODE -ne 0) { throw 'git fetch failed for local clone.' }
+        & git -C $LocalRepo checkout main
+        if ($LASTEXITCODE -ne 0) { throw 'git checkout main failed for local clone.' }
+        & git -C $LocalRepo merge --ff-only origin/main
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host 'LOCAL_SOURCE_SYNC=updated'
+        } else {
+            Write-Host 'LOCAL_SOURCE_SYNC=skipped-non-fast-forward'
+        }
+    } else {
+        Write-Host 'LOCAL_SOURCE_SYNC=skipped-tracked-changes'
+    }
+}
+
 Remove-Item -Recurse -Force $DestinationRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Split-Path $DestinationRoot -Parent), $ReadyRoot | Out-Null
 Copy-Item -Recurse -Force $ArtifactRoot $DestinationRoot
@@ -46,23 +69,3 @@ $Hash = (Get-FileHash -Algorithm SHA256 (Join-Path $ReadyRoot $BinaryName)).Hash
 Write-Host "LOCAL_DELIVERY_TARGET=$Target"
 Write-Host "LOCAL_DELIVERY_DLL=$(Join-Path $ReadyRoot $BinaryName)"
 Write-Host "LOCAL_DELIVERY_SHA256=$Hash"
-
-$GitDir = Join-Path $LocalRepo '.git'
-if (Test-Path $GitDir) {
-    $Dirty = @(& git -C $LocalRepo status --porcelain)
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Unable to inspect the local C:\L4D-DEV\dosprotect clone.'
-    }
-
-    if ($Dirty.Count -eq 0) {
-        & git -C $LocalRepo fetch origin main
-        if ($LASTEXITCODE -ne 0) { throw 'git fetch failed for local clone.' }
-        & git -C $LocalRepo checkout main
-        if ($LASTEXITCODE -ne 0) { throw 'git checkout main failed for local clone.' }
-        & git -C $LocalRepo merge --ff-only origin/main
-        if ($LASTEXITCODE -ne 0) { throw 'Local clone could not fast-forward to origin/main.' }
-        Write-Host 'LOCAL_SOURCE_SYNC=updated'
-    } else {
-        Write-Host 'LOCAL_SOURCE_SYNC=skipped-dirty-worktree'
-    }
-}
