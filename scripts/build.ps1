@@ -113,10 +113,14 @@ function Build-Game {
     if ($Game -eq 'l4d') {
         $TargetConfig = $DependencyLock.L4D
         $DisplayName = 'Left 4 Dead'
+        $BinaryBaseName = 'dosprotect_l4d1_mm'
+        $VdfSource = Join-Path $RepoRoot 'config\dosprotect_l4d1.vdf'
     }
     else {
         $TargetConfig = $DependencyLock.L4D2
         $DisplayName = 'Left 4 Dead 2'
+        $BinaryBaseName = 'dosprotect_l4d2_mm'
+        $VdfSource = Join-Path $RepoRoot 'config\dosprotect_l4d2.vdf'
     }
 
     $Hl2SdkRoot = Join-Path $DepsRoot "hl2sdk-$Game"
@@ -130,11 +134,11 @@ function Build-Game {
     Remove-Item -Recurse -Force $ArtifactRoot, $ObjRoot -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $BinRoot, $MetaRoot, $ObjRoot | Out-Null
 
-    $DllPath = Join-Path $BinRoot 'dosprotect_mm.dll'
-    $PdbPath = Join-Path $BinRoot 'dosprotect_mm.pdb'
+    $DllPath = Join-Path $BinRoot "$BinaryBaseName.dll"
+    $PdbPath = Join-Path $BinRoot "$BinaryBaseName.pdb"
     $ObjPath = Join-Path $ObjRoot 'extension.obj'
     $ObjPdbPath = Join-Path $ObjRoot 'compile.pdb'
-    $ImportLibPath = Join-Path $ObjRoot 'dosprotect_mm.lib'
+    $ImportLibPath = Join-Path $ObjRoot "$BinaryBaseName.lib"
 
     $Defines = @(
         '/DWIN32',
@@ -216,13 +220,17 @@ function Build-Game {
         $ObjPath
     ) + $Libraries
 
-    Write-Host "Linking $DisplayName dosprotect_mm.dll..."
+    Write-Host "Linking $DisplayName $BinaryBaseName.dll..."
     & link.exe @LinkArgs
     if ($LASTEXITCODE -ne 0) {
         throw "$DisplayName link failed with exit code $LASTEXITCODE"
     }
 
-    Copy-Item (Join-Path $RepoRoot 'dosprotect.vdf') (Join-Path $MetaRoot 'dosprotect.vdf') -Force
+    if (-not (Test-Path $VdfSource)) {
+        throw "Target VDF is missing: $VdfSource"
+    }
+
+    Copy-Item $VdfSource (Join-Path $MetaRoot 'dosprotect.vdf') -Force
     Copy-Item (Join-Path $RepoRoot 'README.md') (Join-Path $ArtifactRoot 'README.md') -Force
 
     $Headers = & dumpbin.exe /headers $DllPath
@@ -230,11 +238,22 @@ function Build-Game {
         throw "$DisplayName DLL is not a valid x86 PE image."
     }
 
+    $Exports = & dumpbin.exe /exports $DllPath
+    if ($LASTEXITCODE -ne 0 -or -not ($Exports -match 'CreateInterface')) {
+        throw "$DisplayName DLL does not export CreateInterface as required by Metamod:Source."
+    }
+
+    $PackagedVdf = Get-Content -Raw -Path (Join-Path $MetaRoot 'dosprotect.vdf')
+    if ($PackagedVdf -notmatch [regex]::Escape($BinaryBaseName)) {
+        throw "$DisplayName packaged VDF does not reference $BinaryBaseName."
+    }
+
     $Hash = (Get-FileHash -Algorithm SHA256 $DllPath).Hash
     $Compiler = "MSVC $env:VCToolsVersion (x86)"
     $BuildInfo = @(
         "DoS Protect $DisplayName Win32 build",
-        "Version: 2.0.0-dev.1",
+        "Version: 2.0.0-dev.2",
+        "Binary: $BinaryBaseName.dll",
         "Configuration: $Configuration",
         "SOURCE_ENGINE: $($TargetConfig.Engine)",
         "Metamod:Source commit: $($DependencyLock.MetamodSource.Commit)",
