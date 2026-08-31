@@ -51,11 +51,12 @@ jobs:
             if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
           }
 
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "stable=$($stable.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          "tag_exists=$($tagExists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          "release_exists=$($releaseExists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "version=$version`n", $utf8)
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "tag=$tag`n", $utf8)
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "stable=$($stable.ToString().ToLowerInvariant())`n", $utf8)
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "tag_exists=$($tagExists.ToString().ToLowerInvariant())`n", $utf8)
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "release_exists=$($releaseExists.ToString().ToLowerInvariant())`n", $utf8)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
