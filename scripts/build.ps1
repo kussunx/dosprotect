@@ -133,18 +133,20 @@ function Build-Game {
     $ArtifactRoot = Join-Path $RepoRoot "artifacts\dosprotect-$Game-win32"
     $BinRoot = Join-Path $ArtifactRoot 'addons\dosprotect\bin'
     $MetaRoot = Join-Path $ArtifactRoot 'addons\metamod'
-    $ObjRoot = Join-Path $RepoRoot "out\$Game\obj"
+    $OutRoot = Join-Path $RepoRoot "out\$Game"
+    $ObjRoot = Join-Path $OutRoot 'obj'
 
     Ensure-Checkout -Url $TargetConfig.Repository -Path $Hl2SdkRoot -Commit $TargetConfig.Commit
 
-    Remove-Item -Recurse -Force $ArtifactRoot, $ObjRoot -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $ArtifactRoot, $OutRoot -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $BinRoot, $MetaRoot, $ObjRoot | Out-Null
 
     $DllPath = Join-Path $BinRoot "$BinaryBaseName.dll"
-    $PdbPath = Join-Path $BinRoot "$BinaryBaseName.pdb"
+    $PdbPath = Join-Path $ObjRoot "$BinaryBaseName.pdb"
     $ObjPath = Join-Path $ObjRoot 'extension.obj'
     $ObjPdbPath = Join-Path $ObjRoot 'compile.pdb'
     $ImportLibPath = Join-Path $ObjRoot "$BinaryBaseName.lib"
+    $BuildInfoPath = Join-Path $OutRoot 'build-info.txt'
 
     $Defines = @(
         '/DWIN32',
@@ -215,7 +217,6 @@ function Build-Game {
     }
 
     Copy-Item $VdfSource (Join-Path $MetaRoot 'dosprotect.vdf') -Force
-    Copy-Item (Join-Path $RepoRoot 'README.md') (Join-Path $ArtifactRoot 'README.md') -Force
 
     $Headers = & dumpbin.exe /headers $DllPath
     if ($LASTEXITCODE -ne 0 -or -not ($Headers -match '14C machine \(x86\)')) {
@@ -232,6 +233,13 @@ function Build-Game {
         throw "$DisplayName packaged VDF does not reference $BinaryBaseName."
     }
 
+    $UnexpectedFiles = Get-ChildItem -Path $ArtifactRoot -Recurse -File | Where-Object {
+        $_.Extension -eq '.pdb' -or $_.Name -eq 'README.md' -or $_.Name -eq 'build-info.txt'
+    }
+    if ($UnexpectedFiles) {
+        throw "$DisplayName release artifact contains non-install files: $($UnexpectedFiles.FullName -join ', ')"
+    }
+
     $Hash = (Get-FileHash -Algorithm SHA256 $DllPath).Hash
     $BuildInfo = @(
         "DoS Protect $DisplayName Win32 build",
@@ -245,12 +253,14 @@ function Build-Game {
         "DLL SHA256: $Hash"
     ) -join [Environment]::NewLine
 
-    Set-Content -Path (Join-Path $ArtifactRoot 'build-info.txt') -Value $BuildInfo -Encoding UTF8
+    Set-Content -Path $BuildInfoPath -Value $BuildInfo -Encoding UTF8
 
     Write-Host ''
     Write-Host "$DisplayName build complete."
     Write-Host "Version: $DoSProtectVersion"
     Write-Host "DLL: $DllPath"
+    Write-Host "PDB (internal only): $PdbPath"
+    Write-Host "Build info (internal only): $BuildInfoPath"
     Write-Host "SHA256: $Hash"
 }
 
