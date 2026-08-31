@@ -7,17 +7,23 @@ All notable revamp changes are tracked here.
 ### Mitigation
 
 - Added `DROP-WOULDBLOCK` as the new default zero-length UDP mitigation.
-- The real `recvfrom()` still consumes the zero-length datagram, but the hook now reports `SOCKET_ERROR` with `WSAEWOULDBLOCK` on Windows instead of fabricating a positive packet length.
+- Modern mode now drains queued zero-length datagrams in a bounded loop instead of stopping after the first dropped packet.
+- Added a zero-timeout socket-readiness check before each additional receive, avoiding an unconditional extra blocking `recvfrom()` call.
+- If a real datagram is encountered while draining, its actual payload length, buffer and source address are returned to the engine unchanged.
+- If no deliverable datagram remains, the hook reports `SOCKET_ERROR` with `WSAEWOULDBLOCK` on Windows instead of fabricating a positive packet length.
+- Added `dosp_drain_budget` (default `256`, effective range `1..4096`) to bound work performed by one hook invocation.
+- Added drain-budget hit telemetry.
 - Added runtime A/B selection through `dosp_mitigation_mode`.
 - Kept the previously validated `LEGACY-25` path as `dosp_mitigation_mode 0` while the new path is regression-tested on both games.
 - Added separate telemetry counters for modern drops and legacy fallback responses.
 - Updated status output to report the active mitigation explicitly.
-- Extended the source regression guard so CI requires both the modern default path and the emergency legacy fallback.
+- Extended the source regression guard so CI requires the bounded modern path, modern defaults and the emergency legacy fallback.
 
 ### Validation policy
 
 - `DROP-WOULDBLOCK` must pass the same real runtime regression case already passed by `LEGACY-25` on L4D1 and L4D2.
 - Normal player connections, server query behavior and gameplay must remain functional during the protected test.
+- Repeated `Drain budget hits` during testing should be recorded because they indicate that the configured per-call drain limit is being saturated.
 - The legacy fallback is not removed as part of this revision.
 
 ## 2.0.0-dev.2
