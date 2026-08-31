@@ -53,20 +53,8 @@ jobs:
 
       - name: Publish temporary delivery branch
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: powershell
-        run: |
-          $target = '${{ matrix.target }}'
-          $artifact = Join-Path $PWD "artifacts\dosprotect-$target-win32"
-          $delivery = Join-Path $PWD "delivery\$target"
-          New-Item -ItemType Directory -Force $delivery | Out-Null
-          Copy-Item (Join-Path $artifact 'addons\dosprotect\bin\*.dll') $delivery -Force
-          Copy-Item (Join-Path $artifact 'addons\metamod\dosprotect.vdf') $delivery -Force
-          Copy-Item (Join-Path $artifact 'build-info.txt') $delivery -Force
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add "delivery/$target"
-          git commit -m "delivery: $target recompiled binaries"
-          git push --force origin "HEAD:refs/heads/delivery/$target"
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\publish-delivery.ps1 -Target ${{ matrix.target }}
 
       - name: Upload package (best effort)
         continue-on-error: true
