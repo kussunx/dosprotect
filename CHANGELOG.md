@@ -2,6 +2,24 @@
 
 All notable revamp changes are tracked here.
 
+## 2.0.0-dev.3
+
+### Mitigation
+
+- Added `DROP-WOULDBLOCK` as the new default zero-length UDP mitigation.
+- The real `recvfrom()` still consumes the zero-length datagram, but the hook now reports `SOCKET_ERROR` with `WSAEWOULDBLOCK` on Windows instead of fabricating a positive packet length.
+- Added runtime A/B selection through `dosp_mitigation_mode`.
+- Kept the previously validated `LEGACY-25` path as `dosp_mitigation_mode 0` while the new path is regression-tested on both games.
+- Added separate telemetry counters for modern drops and legacy fallback responses.
+- Updated status output to report the active mitigation explicitly.
+- Extended the source regression guard so CI requires both the modern default path and the emergency legacy fallback.
+
+### Validation policy
+
+- `DROP-WOULDBLOCK` must pass the same real runtime regression case already passed by `LEGACY-25` on L4D1 and L4D2.
+- Normal player connections, server query behavior and gameplay must remain functional during the protected test.
+- The legacy fallback is not removed as part of this revision.
+
 ## 2.0.0-dev.2
 
 ### Runtime
