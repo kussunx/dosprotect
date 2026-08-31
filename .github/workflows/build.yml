@@ -51,10 +51,12 @@ jobs:
         shell: cmd
         run: type artifacts\dosprotect-${{ matrix.target }}-win32\build-info.txt
 
-      - name: Publish temporary delivery branch
+      - name: Publish prerelease assets
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: cmd
-        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\publish-delivery.ps1 -Target ${{ matrix.target }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\publish-release.ps1 -Target ${{ matrix.target }}
 
       - name: Upload package (best effort)
         continue-on-error: true
@@ -64,6 +66,27 @@ jobs:
           path: artifacts/dosprotect-${{ matrix.target }}-win32/**
           if-no-files-found: error
           retention-days: 14
+
+  cleanup-delivery-branches:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    name: Remove temporary delivery branches
+    runs-on: self-hosted
+    timeout-minutes: 5
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Delete temporary delivery branches
+        shell: cmd
+        run: |
+          git push origin --delete delivery/l4d || echo delivery/l4d already removed.
+          git push origin --delete delivery/l4d2 || echo delivery/l4d2 already removed.
 
   cleanup-merged-branch:
     if: >-
