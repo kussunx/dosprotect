@@ -1,71 +1,24 @@
 # Changelog
 
-All notable revamp changes are tracked here.
+## 2.0.0-dev.4
+
+- `DROP-WOULDBLOCK` is now the only mitigation path after successful runtime validation on both Left 4 Dead and Left 4 Dead 2.
+- Removed the old `LEGACY-25` fallback, its selector ConVar and legacy-only telemetry.
+- Reduced hot-path overhead by sharing one monotonic timestamp across each drained burst and moving expiry/PPS maintenance out of the per-datagram accounting function.
+- Made PPS calculation use the actual elapsed window instead of whole-second truncation.
+- Increased source-expiry maintenance interval to reduce attack-path work.
+- Fixed hook-chain handling so disable/unload refuses to break a later recvfrom hook.
+- Simplified the build checks, CI workflow and public documentation.
+- Removed obsolete compatibility scaffolding and development-only regression documentation.
 
 ## 2.0.0-dev.3
 
-### Mitigation
+- Introduced the bounded `DROP-WOULDBLOCK` mitigation.
+- Added configurable drain budget and drain-budget telemetry.
+- Added runtime source tracking, expiration, PPS statistics and diagnostics.
+- Added separate L4D1 and L4D2 Win32 binaries and packages.
 
-- Added `DROP-WOULDBLOCK` as the new default zero-length UDP mitigation.
-- Modern mode now drains queued zero-length datagrams in a bounded loop instead of stopping after the first dropped packet.
-- Added a zero-timeout socket-readiness check before each additional receive, avoiding an unconditional extra blocking `recvfrom()` call.
-- If a real datagram is encountered while draining, its actual payload length, buffer and source address are returned to the engine unchanged.
-- If no deliverable datagram remains, the hook reports `SOCKET_ERROR` with `WSAEWOULDBLOCK` on Windows instead of fabricating a positive packet length.
-- Added `dosp_drain_budget` (default `256`, effective range `1..4096`) to bound work performed by one hook invocation.
-- Added drain-budget hit telemetry.
-- Added runtime A/B selection through `dosp_mitigation_mode`.
-- Kept the previously validated `LEGACY-25` path as `dosp_mitigation_mode 0` while the new path is regression-tested on both games.
-- Added separate telemetry counters for modern drops and legacy fallback responses.
-- Updated status output to report the active mitigation explicitly.
-- Extended the source regression guard so CI requires the bounded modern path, modern defaults and the emergency legacy fallback.
+## 2.0.0-dev.1 / dev.2
 
-### Validation policy
-
-- `DROP-WOULDBLOCK` must pass the same real runtime regression case already passed by `LEGACY-25` on L4D1 and L4D2.
-- Normal player connections, server query behavior and gameplay must remain functional during the protected test.
-- Repeated `Drain budget hits` during testing should be recorded because they indicate that the configured per-call drain limit is being saturated.
-- The legacy fallback is not removed as part of this revision.
-
-## 2.0.0-dev.2
-
-### Runtime
-
-- Preserved the legacy compatibility contract: zero-length `recvfrom()` result -> `return 25`.
-- Replaced the original linear `SourceHook::List<DoSCount *>` source lookup with a bounded `std::unordered_map`.
-- Replaced 32-bit source counters with 64-bit counters.
-- Added monotonic first/last-seen timestamps.
-- Added bounded source retention with `dosp_max_sources` (default `4096`, effective range `128..65536`).
-- Added inactivity expiration with `dosp_expire_seconds` (default `900`; `0` disables expiration).
-- Added amortized maintenance instead of performing a full table scan for every intercepted packet.
-- Added invalid/missing source-address accounting while preserving the mitigation response.
-- Added accounting for packets not retained because the source table is full.
-- Added total interception and PPS telemetry.
-- Added ranked `dosp_top` output.
-- Added `dosp_reset` for telemetry/source-table reset without disabling protection.
-- Added safer `sockaddr`/`fromlen` validation.
-- Added defensive hook lifecycle checks and idempotent enable behavior.
-- Avoided overwriting a later third-party recvfrom hook when disabling/unloading.
-- Kept the packet hot path free of per-packet logging.
-
-### Build / packaging
-
-- L4D1 binary renamed to `dosprotect_l4d1_mm.dll`.
-- L4D2 binary renamed to `dosprotect_l4d2_mm.dll`.
-- Added target-specific Metamod VDF descriptors.
-- Added package validation for x86 PE architecture.
-- Added validation for the Metamod `CreateInterface` export.
-- Added validation that each packaged VDF references the matching target binary.
-- Added `NOMINMAX` to avoid Windows macro collisions with the C++ standard library.
-
-### Documentation
-
-- Expanded README for dual-game build, installation, commands and ConVars.
-- Added a runtime regression acceptance procedure.
-
-## 2.0.0-dev.1
-
-- Established a buildable dual-target baseline for L4D1 and L4D2.
-- Added pinned Metamod:Source and HL2SDK dependencies.
-- Added Windows x86 self-hosted GitHub Actions builds.
-- Added a source regression guard for the legacy `ret == 0 -> return 25` behavior.
-- Updated revamp authorship to Kussun while retaining credit to ZombieX2.net for the original project/source.
+- Established the dual-game build baseline.
+- Modernized source tracking and hook lifecycle around the original plugin behavior.

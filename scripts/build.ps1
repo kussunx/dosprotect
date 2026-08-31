@@ -17,13 +17,9 @@ $SourceFile = Join-Path $RepoRoot 'src\extension.cpp'
 $HeaderFile = Join-Path $RepoRoot 'src\extension.h'
 $DependencyLock = Import-PowerShellDataFile (Join-Path $RepoRoot 'build\dependencies.psd1')
 
-if (-not (Test-Path $HeaderFile)) {
-    throw "Version header not found: $HeaderFile"
-}
-
 $HeaderText = Get-Content -Raw -Path $HeaderFile
 if ($HeaderText -notmatch '#define\s+DOSP_VERSION\s+"([^"]+)"') {
-    throw 'Unable to derive DOSP_VERSION from src\extension.h.'
+    throw 'Unable to read DOSP_VERSION from src\extension.h.'
 }
 $DoSProtectVersion = $Matches[1]
 
@@ -126,8 +122,7 @@ function Build-Game {
         $DisplayName = 'Left 4 Dead'
         $BinaryBaseName = 'dosprotect_l4d1_mm'
         $VdfSource = Join-Path $RepoRoot 'config\dosprotect_l4d1.vdf'
-    }
-    else {
+    } else {
         $TargetConfig = $DependencyLock.L4D2
         $DisplayName = 'Left 4 Dead 2'
         $BinaryBaseName = 'dosprotect_l4d2_mm'
@@ -176,29 +171,19 @@ function Build-Game {
     )
 
     $Includes = @(
-        "/I$($MetamodRoot)\core",
-        "/I$($MetamodRoot)\core\sourcehook",
-        "/I$($Hl2SdkRoot)\public",
-        "/I$($Hl2SdkRoot)\public\engine",
-        "/I$($Hl2SdkRoot)\public\game\server",
-        "/I$($Hl2SdkRoot)\public\tier0",
-        "/I$($Hl2SdkRoot)\public\tier1",
-        "/I$($Hl2SdkRoot)\public\vstdlib"
+        "/I$MetamodRoot\core",
+        "/I$MetamodRoot\core\sourcehook",
+        "/I$Hl2SdkRoot\public",
+        "/I$Hl2SdkRoot\public\engine",
+        "/I$Hl2SdkRoot\public\game\server",
+        "/I$Hl2SdkRoot\public\tier0",
+        "/I$Hl2SdkRoot\public\tier1",
+        "/I$Hl2SdkRoot\public\vstdlib"
     )
 
     $CompileArgs = @(
-        '/nologo',
-        '/c',
-        '/TP',
-        '/O2',
-        '/MT',
-        '/W3',
-        '/Zi',
-        '/EHsc',
-        '/Oy-',
-        '/std:c++17',
-        "/Fo$ObjPath",
-        "/Fd$ObjPdbPath"
+        '/nologo', '/c', '/TP', '/O2', '/MT', '/W3', '/Zi', '/EHsc', '/Oy-', '/std:c++17',
+        "/Fo$ObjPath", "/Fd$ObjPdbPath"
     ) + $Defines + $Includes + @($SourceFile)
 
     Write-Host "Compiling DoS Protect for $DisplayName (Win32/x86, SOURCE_ENGINE=$($TargetConfig.Engine))..."
@@ -211,24 +196,12 @@ function Build-Game {
         (Join-Path $Hl2SdkRoot 'lib\public\tier0.lib'),
         (Join-Path $Hl2SdkRoot 'lib\public\tier1.lib'),
         (Join-Path $Hl2SdkRoot 'lib\public\vstdlib.lib'),
-        'kernel32.lib',
-        'user32.lib',
-        'advapi32.lib',
-        'ws2_32.lib'
+        'kernel32.lib', 'user32.lib', 'advapi32.lib', 'ws2_32.lib'
     )
 
     $LinkArgs = @(
-        '/NOLOGO',
-        '/DLL',
-        '/MACHINE:X86',
-        '/SUBSYSTEM:WINDOWS',
-        '/OPT:REF',
-        '/OPT:ICF',
-        '/DEBUG',
-        "/PDB:$PdbPath",
-        "/IMPLIB:$ImportLibPath",
-        "/OUT:$DllPath",
-        $ObjPath
+        '/NOLOGO', '/DLL', '/MACHINE:X86', '/SUBSYSTEM:WINDOWS', '/OPT:REF', '/OPT:ICF', '/DEBUG',
+        "/PDB:$PdbPath", "/IMPLIB:$ImportLibPath", "/OUT:$DllPath", $ObjPath
     ) + $Libraries
 
     Write-Host "Linking $DisplayName $BinaryBaseName.dll..."
@@ -251,7 +224,7 @@ function Build-Game {
 
     $Exports = & dumpbin.exe /exports $DllPath
     if ($LASTEXITCODE -ne 0 -or -not ($Exports -match 'CreateInterface')) {
-        throw "$DisplayName DLL does not export CreateInterface as required by Metamod:Source."
+        throw "$DisplayName DLL does not export CreateInterface."
     }
 
     $PackagedVdf = Get-Content -Raw -Path (Join-Path $MetaRoot 'dosprotect.vdf')
@@ -260,7 +233,6 @@ function Build-Game {
     }
 
     $Hash = (Get-FileHash -Algorithm SHA256 $DllPath).Hash
-    $Compiler = "MSVC $env:VCToolsVersion (x86)"
     $BuildInfo = @(
         "DoS Protect $DisplayName Win32 build",
         "Version: $DoSProtectVersion",
@@ -269,9 +241,10 @@ function Build-Game {
         "SOURCE_ENGINE: $($TargetConfig.Engine)",
         "Metamod:Source commit: $($DependencyLock.MetamodSource.Commit)",
         "HL2SDK $Game commit: $($TargetConfig.Commit)",
-        "Compiler: $Compiler",
+        "Compiler: MSVC $env:VCToolsVersion (x86)",
         "DLL SHA256: $Hash"
     ) -join [Environment]::NewLine
+
     Set-Content -Path (Join-Path $ArtifactRoot 'build-info.txt') -Value $BuildInfo -Encoding UTF8
 
     Write-Host ''
@@ -293,7 +266,7 @@ if ($CleanDeps -and (Test-Path $DepsRoot)) {
     Remove-Item -Recurse -Force $DepsRoot
 }
 
-& (Join-Path $PSScriptRoot 'verify-legacy-mitigation.ps1')
+& (Join-Path $PSScriptRoot 'verify-mitigation.ps1')
 
 Ensure-Checkout -Url $DependencyLock.MetamodSource.Repository -Path $MetamodRoot -Commit $DependencyLock.MetamodSource.Commit -Submodules
 Import-VsDevEnvironment

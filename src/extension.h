@@ -1,23 +1,28 @@
-#ifndef _INCLUDE_METAMOD_SOURCE_DOSPROTECT_MAIN_H
-#define _INCLUDE_METAMOD_SOURCE_DOSPROTECT_MAIN_H
+#pragma once
 
-#define DOSP_VERSION "2.0.0-dev.3"
+#define DOSP_VERSION "2.0.0-dev.4"
 
-#include "platform_wrappers.h"
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#include <winsock2.h>
+#include <windows.h>
 
 #include <ISmmPlugin.h>
 #include "tier0/vcrmode.h"
 
-class DoSProtect :
-    public ISmmPlugin,
-    public IConCommandBaseAccessor
+class DoSProtect : public ISmmPlugin, public IConCommandBaseAccessor
 {
 public:
     bool Load(PluginId id, ISmmAPI *ismm, char *error, size_t maxlen, bool late);
     bool Unload(char *error, size_t maxlen);
     bool RegisterConCommandBase(ConCommandBase *pCommandBase);
 
-public:
     const char *GetAuthor();
     const char *GetName();
     const char *GetDescription();
@@ -29,5 +34,3 @@ public:
 };
 
 PLUGIN_GLOBALVARS();
-
-#endif

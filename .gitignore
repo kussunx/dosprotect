@@ -1,16 +1,14 @@
-# Local dependencies and build output
 .deps/
 out/
 artifacts/
+READY/
 
-# Visual Studio
 .vs/
 *.user
 *.suo
 *.VC.db
 *.VC.VC.opendb
 
-# C/C++ build products
 *.obj
 *.pdb
 *.ilk
@@ -18,6 +16,5 @@ artifacts/
 *.lib
 *.dll
 
-# OS/editor noise
 Thumbs.db
 .DS_Store

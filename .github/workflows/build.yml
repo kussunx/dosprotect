@@ -1,85 +1,40 @@
-name: Build DoS Protect
+name: Build
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - closed
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: dosprotect-${{ github.event_name }}-${{ github.ref }}
+  group: dosprotect-main
   cancel-in-progress: true
 
 jobs:
   build:
-    if: github.event_name != 'pull_request' || github.event.action != 'closed'
     name: ${{ matrix.target }} / Windows x86
     runs-on: self-hosted
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - l4d
-          - l4d2
+        target: [l4d, l4d2]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Verify legacy mitigation
+      - name: Verify mitigation
         shell: cmd
-        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-legacy-mitigation.ps1
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-mitigation.ps1
 
-      - name: Build and package ${{ matrix.target }}
+      - name: Build ${{ matrix.target }}
         shell: cmd
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Target ${{ matrix.target }} -Configuration Release
 
-      - name: Report build metadata
+      - name: Build info
         shell: cmd
         run: type artifacts\dosprotect-${{ matrix.target }}-win32\build-info.txt
-
-      - name: Upload package (best effort)
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: dosprotect-${{ matrix.target }}-win32
-          path: artifacts/dosprotect-${{ matrix.target }}-win32/**
-          if-no-files-found: error
-          retention-days: 14
-
-  cleanup-merged-branch:
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.action == 'closed' &&
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    name: Delete merged branch
-    runs-on: self-hosted
-    timeout-minutes: 5
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout main
-        uses: actions/checkout@v5
-        with:
-          ref: main
-
-      - name: Delete merged head branch
-        shell: cmd
-        env:
-          MERGED_BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: git push origin --delete "%MERGED_BRANCH%" || echo Branch was already removed.
