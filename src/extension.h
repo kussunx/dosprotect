@@ -1,6 +1,6 @@
 #pragma once
 
-#define DOSP_VERSION "2.0.0-dev.4"
+#define DOSP_VERSION "2.0.0"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
