@@ -93,12 +93,7 @@ artifacts/dosprotect-l4d-win32/
 
 ## GitHub Actions / self-hosted runner
 
-The workflow uses the repository's Windows self-hosted runner label:
-
-```text
-self-hosted
-dosprotect
-```
+The workflow targets `self-hosted` without requiring the runner name to also be configured as a custom label. On this repository the intended runner is the Dev VM runner named `dosprotect`; `scripts/build.ps1` additionally rejects non-Windows hosts.
 
 It runs on pushes to `main`, pull requests targeting `main`, and manual `workflow_dispatch` runs. Successful runs upload `dosprotect-l4d-win32` as a GitHub Actions artifact.
 
