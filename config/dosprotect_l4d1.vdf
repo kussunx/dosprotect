@@ -1,0 +1,5 @@
+"Metamod Plugin"
+{
+    "alias" "dosprotect"
+    "file"  "addons/dosprotect/bin/dosprotect_l4d1_mm"
+}
