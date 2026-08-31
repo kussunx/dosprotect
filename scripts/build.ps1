@@ -14,7 +14,18 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $SourceFile = Join-Path $RepoRoot 'src\extension.cpp'
+$HeaderFile = Join-Path $RepoRoot 'src\extension.h'
 $DependencyLock = Import-PowerShellDataFile (Join-Path $RepoRoot 'build\dependencies.psd1')
+
+if (-not (Test-Path $HeaderFile)) {
+    throw "Version header not found: $HeaderFile"
+}
+
+$HeaderText = Get-Content -Raw -Path $HeaderFile
+if ($HeaderText -notmatch '#define\s+DOSP_VERSION\s+"([^"]+)"') {
+    throw 'Unable to derive DOSP_VERSION from src\extension.h.'
+}
+$DoSProtectVersion = $Matches[1]
 
 if ($env:DOSP_DEPS_DIR) {
     $DepsRoot = $env:DOSP_DEPS_DIR
@@ -252,7 +263,7 @@ function Build-Game {
     $Compiler = "MSVC $env:VCToolsVersion (x86)"
     $BuildInfo = @(
         "DoS Protect $DisplayName Win32 build",
-        "Version: 2.0.0-dev.2",
+        "Version: $DoSProtectVersion",
         "Binary: $BinaryBaseName.dll",
         "Configuration: $Configuration",
         "SOURCE_ENGINE: $($TargetConfig.Engine)",
@@ -265,6 +276,7 @@ function Build-Game {
 
     Write-Host ''
     Write-Host "$DisplayName build complete."
+    Write-Host "Version: $DoSProtectVersion"
     Write-Host "DLL: $DllPath"
     Write-Host "SHA256: $Hash"
 }
