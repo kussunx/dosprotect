@@ -9,7 +9,7 @@ permissions:
 
 concurrency:
   group: dosprotect-repack-v2
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   repack:
