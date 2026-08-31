@@ -1,0 +1,25 @@
+name: Cleanup stale branches
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    name: Remove obsolete branch
+    runs-on: self-hosted
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Delete obsolete l4d-l4d2 branch
+        shell: cmd
+        run: git push origin --delete "build/l4d-l4d2" || echo Branch was already removed.
