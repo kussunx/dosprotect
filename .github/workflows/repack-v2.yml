@@ -1,0 +1,105 @@
+name: Repack v2.0.0
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dosprotect-repack-v2
+  cancel-in-progress: false
+
+jobs:
+  repack:
+    runs-on: self-hosted
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Rebuild and replace release assets
+        shell: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '2.0.0'
+          $tag = 'v2.0.0'
+
+          & .\scripts\build.ps1 -Target all -Configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
+
+          $packages = @(
+            @{
+              Root = '.\artifacts\dosprotect-l4d-win32'
+              Zip = "dosprotect-$version-l4d1-win32.zip"
+              Expected = @(
+                'addons\dosprotect\bin\dosprotect_l4d1_mm.dll',
+                'addons\metamod\dosprotect.vdf'
+              )
+            },
+            @{
+              Root = '.\artifacts\dosprotect-l4d2-win32'
+              Zip = "dosprotect-$version-l4d2-win32.zip"
+              Expected = @(
+                'addons\dosprotect\bin\dosprotect_l4d2_mm.dll',
+                'addons\metamod\dosprotect.vdf'
+              )
+            }
+          )
+
+          foreach ($package in $packages) {
+            $root = (Resolve-Path $package.Root).Path
+            $actual = @(Get-ChildItem -Path $root -Recurse -File | ForEach-Object {
+              $_.FullName.Substring($root.Length + 1)
+            } | Sort-Object)
+            $expected = @($package.Expected | Sort-Object)
+
+            if (($actual.Count -ne $expected.Count) -or (Compare-Object $actual $expected)) {
+              throw "Unexpected release package contents under $root. Actual: $($actual -join ', ')"
+            }
+
+            if (Test-Path $package.Zip) { Remove-Item $package.Zip -Force }
+            Compress-Archive -Path (Join-Path $root '*') -DestinationPath $package.Zip -Force
+          }
+
+          $hash1 = (Get-FileHash "dosprotect-$version-l4d1-win32.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $hash2 = (Get-FileHash "dosprotect-$version-l4d2-win32.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            "$hash1  dosprotect-$version-l4d1-win32.zip",
+            "$hash2  dosprotect-$version-l4d2-win32.zip"
+          ) | Set-Content -Path SHA256SUMS.txt -Encoding ascii
+
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+
+          $release = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" -Headers $headers
+
+          $assetNames = @(
+            "dosprotect-$version-l4d1-win32.zip",
+            "dosprotect-$version-l4d2-win32.zip",
+            'SHA256SUMS.txt'
+          )
+
+          foreach ($asset in @($release.assets)) {
+            if ($assetNames -contains $asset.name) {
+              Invoke-RestMethod -Method Delete -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)" -Headers $headers
+            }
+          }
+
+          $uploadUrl = $release.upload_url -replace '\{\?name,label\}$', ''
+          foreach ($asset in $assetNames) {
+            $name = [uri]::EscapeDataString($asset)
+            $contentType = if ($asset.EndsWith('.zip')) { 'application/zip' } else { 'text/plain' }
+            Invoke-RestMethod -Method Post -Uri "${uploadUrl}?name=$name" -Headers $headers -InFile $asset -ContentType $contentType | Out-Null
+          }
+
+          Write-Host 'Clean v2.0.0 assets uploaded.'
+          Write-Host "L4D1 ZIP SHA256: $hash1"
+          Write-Host "L4D2 ZIP SHA256: $hash2"
