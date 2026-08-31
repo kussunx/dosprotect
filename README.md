@@ -2,7 +2,9 @@
 
 Modern revamp of the original **DoS Protect** Metamod:Source plugin for **Left 4 Dead** and **Left 4 Dead 2**.
 
-The project intentionally preserves the legacy UDP mitigation that has proven effective in production: when the hooked `recvfrom()` path returns a zero-length datagram, the compatibility path records the event and returns `25` to the engine. This behavior is regression-guarded and must not be removed or altered without a verified replacement that blocks the same real attack case on both games.
+The project now uses a standards-oriented zero-length UDP filtering strategy by default: the real `recvfrom()` consumes the datagram, DoS Protect records it, and the hook returns the normal non-blocking "no deliverable packet" result (`SOCKET_ERROR` with `WSAEWOULDBLOCK` on Windows) instead of fabricating a positive byte count.
+
+The known-working `LEGACY-25` behavior remains available as a runtime fallback while the modern path is validated against the same real attack case on both games.
 
 ## Authorship
 
@@ -13,9 +15,9 @@ This repository is a substantial modernization based on the original DoS Protect
 
 ## Current version
 
-`2.0.0-dev.2`
+`2.0.0-dev.3`
 
-This revision begins the full runtime revamp while retaining the known-working `ret == 0 -> return 25` compatibility contract.
+This revision introduces the modern `DROP-WOULDBLOCK` mitigation as the default while retaining `LEGACY-25` as an immediate A/B fallback.
 
 ## Supported targets
 
@@ -26,27 +28,78 @@ This revision begins the full runtime revamp while retaining the known-working `
 
 Both binaries are produced from the same source tree. Packet-handling logic is shared between L4D1 and L4D2 and the compiler rejects unsupported Source engine targets.
 
-## What changed in the revamp
+## Mitigation modes
 
-The original plugin kept a linear linked list of heap-allocated IP records for the entire server lifetime. The current implementation keeps the same mitigation response but modernizes the surrounding runtime:
+### Modern mode — default
+
+```text
+dosp_mitigation_mode 1
+```
+
+Reported as:
+
+```text
+Mitigation: DROP-WOULDBLOCK
+```
+
+The hot path is:
+
+```cpp
+const int ret = g_realRecvFrom(...);
+if (ret == 0)
+{
+    RecordZeroDatagram(...);
+    WSASetLastError(WSAEWOULDBLOCK);
+    return SOCKET_ERROR;
+}
+return ret;
+```
+
+The zero-length UDP datagram has already been consumed by the real socket call. Returning the normal non-blocking "nothing deliverable" result prevents the Source engine packet parser from receiving the zero-length datagram without claiming that bytes exist in the receive buffer.
+
+### Legacy fallback
+
+```text
+dosp_mitigation_mode 0
+```
+
+Reported as:
+
+```text
+Mitigation: LEGACY-25
+```
+
+This retains the previously validated behavior:
+
+```cpp
+if (ret == 0)
+{
+    RecordZeroDatagram(...);
+    return 25;
+}
+```
+
+The fallback can be selected at runtime without recompiling or restarting the server. It remains intentionally available until the modern method passes the full regression procedure on both L4D1 and L4D2.
+
+## Runtime modernization
+
+The original plugin kept a linear linked list of heap-allocated IP records for the entire server lifetime. The current implementation includes:
 
 - bounded IPv4 source table using `std::unordered_map` instead of a linear `SourceHook::List` scan;
 - 64-bit packet counters;
-- randomized mixed IPv4 hashing to make attacker-controlled key distribution less predictable;
+- randomized mixed IPv4 hashing;
 - first/last-seen tracking using a monotonic clock;
 - configurable expiration of inactive source records;
 - configurable hard limit on retained source records;
-- accounting for packets that cannot be associated with a valid IPv4 source;
-- accounting for packets intentionally left untracked when the source table is full;
-- total intercepted packet count;
-- current/last/peak one-second telemetry;
+- validated `sockaddr`/`fromlen` handling before reading IPv4 data;
+- total, current, last and peak PPS telemetry;
+- separate counters for modern drops and legacy fallback responses;
 - `dosp_top` ranked-source diagnostics;
 - `dosp_reset` telemetry reset without disabling protection;
-- validated `sockaddr`/`fromlen` handling before reading an IPv4 address;
 - safer/idempotent hook installation and removal;
-- protection against accidentally overwriting another plugin's later recvfrom hook during disable/unload;
+- protection against overwriting another plugin's later recvfrom hook during disable/unload;
 - no per-packet console or disk logging in the hot path;
-- per-game DLL and VDF packaging;
+- target-specific L4D1/L4D2 DLL and VDF packaging;
 - build validation for x86 PE format, `CreateInterface` export and VDF/binary consistency.
 
 ## Runtime commands and ConVars
@@ -57,7 +110,7 @@ The original plugin kept a linear linked list of heap-allocated IP records for t
 dosp_status
 ```
 
-Shows version, game, binary, hook state, compatibility mode, total zero-length UDP interceptions, tracked source count, invalid-source count, table-full count, expired records, PPS telemetry and the top tracked sources.
+Shows version, game, binary, hook state, active mitigation, total zero-length UDP interceptions, modern/legacy response counts, tracked source count, invalid-source count, table-full count, expired records, PPS telemetry and the top tracked sources.
 
 ```text
 dosp_top
@@ -69,7 +122,7 @@ Shows the top 20 retained IPv4 sources ranked by intercepted packet count.
 dosp_reset
 ```
 
-Clears telemetry and the retained source table. It does **not** change whether protection is enabled.
+Clears telemetry and the retained source table. It does **not** change whether protection is enabled or which mitigation mode is selected.
 
 ### ConVars
 
@@ -86,6 +139,15 @@ dosp_enable 1
 `1` enables the recvfrom protection hook. `0` disables it.
 
 ```text
+dosp_mitigation_mode 1
+```
+
+- `1`: `DROP-WOULDBLOCK` modern mode, default.
+- `0`: `LEGACY-25` fallback.
+
+The mode changes immediately at runtime.
+
+```text
 dosp_max_sources 4096
 ```
 
@@ -96,28 +158,6 @@ dosp_expire_seconds 900
 ```
 
 Inactive records are removed after this many seconds. `0` disables expiration. Maintenance is amortized and does not scan the source table on every packet.
-
-## Compatibility mode
-
-The runtime reports:
-
-```text
-Compatibility: LEGACY-25
-```
-
-The critical path remains intentionally simple:
-
-```cpp
-const int ret = g_realRecvFrom(...);
-if (ret == 0)
-{
-    RecordZeroDatagram(from, fromlen);
-    return 25;
-}
-return ret;
-```
-
-`RecordZeroDatagram()` may update bounded telemetry, but it does not change the compatibility return value. Even if source metadata is absent or invalid, the function still returns `25` after a zero-length datagram because the mitigation contract takes priority over accounting.
 
 ## Repository layout
 
@@ -144,13 +184,11 @@ README.md
 
 ## Pinned upstream dependencies
 
-Exact upstream revisions are stored in `build/dependencies.psd1` so SDK updates cannot silently change the binary produced by this baseline:
+Exact upstream revisions are stored in `build/dependencies.psd1`:
 
 - Metamod:Source `1.12-dev`: `afc8233eedcd0c832b411c1da852328328db5c50`
 - HL2SDK `l4d`: `0a8e862697335b12976a124daf728c38e975e381`
 - HL2SDK `l4d2`: `2a31cd007b2d7d2f964dc093eedcf7a812cf9dd6`
-
-The build script downloads these repositories automatically and caches them outside the tracked source tree.
 
 ## Local build
 
@@ -179,13 +217,11 @@ Build only Left 4 Dead 2:
 .\scripts\build.ps1 -Target l4d2
 ```
 
-Discard cached dependencies and fetch the pinned revisions again:
+Discard cached dependencies and fetch pinned revisions again:
 
 ```powershell
 .\scripts\build.ps1 -Target all -CleanDeps
 ```
-
-The script discovers Visual Studio with `vswhere.exe`, initializes an x86 developer environment through `VsDevCmd.bat`, compiles with the installed `cl.exe`, links against the correct HL2SDK libraries and validates each result using `dumpbin.exe`.
 
 ## Build output
 
@@ -223,17 +259,11 @@ Each target-specific VDF points to the matching binary. The build fails if the V
 
 ## GitHub Actions / self-hosted runner
 
-`.github/workflows/build.yml` runs a two-target matrix on the repository self-hosted Windows runner. The intended runner is the Dev VM runner named `dosprotect`.
+`.github/workflows/build.yml` runs a two-target matrix on the self-hosted Windows runner. Every push to `main`, pull request targeting `main`, or manual workflow run builds both packages.
 
-Every push to `main`, pull request targeting `main`, or manual workflow run builds both packages.
-
-The upload to GitHub Actions artifact storage is **best effort**. Artifact-storage quota exhaustion does not invalidate a successful compile/link/package validation. The actual build result is determined before the upload step.
-
-Merged in-repository pull request branches are automatically removed by the workflow to keep the repository clean.
+The upload to GitHub Actions artifact storage is **best effort**. Artifact-storage quota exhaustion does not invalidate a successful compile/link/package validation.
 
 ## Installation — Left 4 Dead
-
-Copy the packaged `addons` directory from `dosprotect-l4d-win32` into the L4D game directory so the resulting paths are:
 
 ```text
 left4dead/addons/dosprotect/bin/dosprotect_l4d1_mm.dll
@@ -242,28 +272,35 @@ left4dead/addons/metamod/dosprotect.vdf
 
 ## Installation — Left 4 Dead 2
 
-Copy the packaged `addons` directory from `dosprotect-l4d2-win32` into the L4D2 game directory so the resulting paths are:
-
 ```text
 left4dead2/addons/dosprotect/bin/dosprotect_l4d2_mm.dll
 left4dead2/addons/metamod/dosprotect.vdf
 ```
 
-Restart the server and verify the plugin through Metamod:
+Restart the server and verify:
 
 ```text
 meta list
+dosp_status
 ```
 
-Then inspect:
+For `dev.3`, the expected default status is:
 
 ```text
-dosp_status
+Status: ENABLED
+Mitigation: DROP-WOULDBLOCK
+Legacy fallback: available (dosp_mitigation_mode 0)
 ```
 
 ## Runtime regression policy
 
-Source/build CI is not a replacement for the real server attack regression. Any future change to the packet-handling path must be validated separately on both games.
+Source/build CI is not a replacement for the real server regression. The modern mode is accepted only after the same controlled test case that previously validated `LEGACY-25` is blocked on both games while normal connections, queries and gameplay remain functional.
+
+If the new path does not behave correctly during testing, switch immediately to:
+
+```text
+dosp_mitigation_mode 0
+```
 
 See [`docs/REGRESSION_TEST.md`](docs/REGRESSION_TEST.md) for the acceptance procedure.
 
