@@ -19,9 +19,7 @@ concurrency:
 jobs:
   build:
     name: L4D1 / Windows x86
-    runs-on:
-      - self-hosted
-      - dosprotect
+    runs-on: self-hosted
     timeout-minutes: 20
 
     steps:
