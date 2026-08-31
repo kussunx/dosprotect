@@ -122,6 +122,8 @@ New-Item -ItemType Directory -Force $BinRoot, $MetaRoot, $ObjRoot | Out-Null
 $DllPath = Join-Path $BinRoot 'dosprotect_mm.dll'
 $PdbPath = Join-Path $BinRoot 'dosprotect_mm.pdb'
 $ObjPath = Join-Path $ObjRoot 'extension.obj'
+$ObjPdbPath = Join-Path $ObjRoot 'compile.pdb'
+$ImportLibPath = Join-Path $ObjRoot 'dosprotect_mm.lib'
 
 $Defines = @(
     '/DWIN32',
@@ -169,7 +171,8 @@ $CompileArgs = @(
     '/EHsc',
     '/Oy-',
     '/std:c++17',
-    "/Fo$ObjPath"
+    "/Fo$ObjPath",
+    "/Fd$ObjPdbPath"
 ) + $Defines + $Includes + @($SourceFile)
 
 Write-Host 'Compiling DoS Protect for Left 4 Dead (Win32/x86)...'
@@ -197,6 +200,7 @@ $LinkArgs = @(
     '/OPT:ICF',
     '/DEBUG',
     "/PDB:$PdbPath",
+    "/IMPLIB:$ImportLibPath",
     "/OUT:$DllPath",
     $ObjPath
 ) + $Libraries
@@ -215,7 +219,7 @@ if ($LASTEXITCODE -ne 0 -or -not ($Headers -match '14C machine \(x86\)')) {
 }
 
 $Hash = (Get-FileHash -Algorithm SHA256 $DllPath).Hash
-$Compiler = (& cl.exe 2>&1 | Select-Object -First 1)
+$Compiler = "MSVC $env:VCToolsVersion (x86)"
 $BuildInfo = @(
     'DoS Protect L4D1 Win32 build',
     "Version: 2.0.0-dev.1",
