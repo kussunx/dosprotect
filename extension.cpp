@@ -172,7 +172,7 @@ bool DoSProtect::RegisterConCommandBase(ConCommandBase *pCommandBase)
 
 const char *DoSProtect::GetLicense()
 {
-	return "www.ZombieX2,net";
+	return "Unspecified - see README";
 }
 
 const char *DoSProtect::GetVersion()
