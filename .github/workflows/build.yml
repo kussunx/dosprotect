@@ -37,4 +37,4 @@ jobs:
 
       - name: Build info
         shell: cmd
-        run: type artifacts\dosprotect-${{ matrix.target }}-win32\build-info.txt
+        run: type out\${{ matrix.target }}\build-info.txt
