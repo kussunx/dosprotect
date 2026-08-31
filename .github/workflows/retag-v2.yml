@@ -1,0 +1,26 @@
+name: Align v2.0.0 tag
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  retag:
+    runs-on: self-hosted
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Point v2.0.0 at clean release commit
+        shell: cmd
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -fa v2.0.0 fa898697e528a56347a914654f44f87bef72f270 -m "DoS Protect 2.0.0"
+          git push --force origin refs/tags/v2.0.0
