@@ -6,6 +6,9 @@
 #if !defined WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#if !defined NOMINMAX
+#define NOMINMAX
+#endif
 #if !defined stat
 #define stat _stat
 #endif
