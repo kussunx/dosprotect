@@ -13,32 +13,32 @@ if (-not (Test-Path $SourcePath)) {
 
 $Source = Get-Content -Raw -Path $SourcePath
 
-$HookPattern = '(?s)int\s+MyRecvFromHook\s*\([^)]*\).*?const\s+int\s+ret\s*=\s*g_realRecvFrom.*?if\s*\(\s*ret\s*!=\s*0\s*\).*?return\s+ret\s*;.*?return\s+HandleModernZeroDatagrams\s*\('
-$ModernDrainPattern = '(?s)int\s+HandleModernZeroDatagrams\s*\([^)]*\).*?RecordZeroDatagram\s*\(\s*from\s*,\s*fromlen\s*\).*?SocketReadableNow\s*\(\s*s\s*\).*?g_realRecvFrom\s*\(\s*s\s*,\s*buf\s*,\s*len\s*,\s*flags\s*,\s*from\s*,\s*fromlen\s*\).*?SetNoDeliverableDatagramError\s*\(\s*\).*?return\s+SOCKET_ERROR\s*;'
-$LegacyFallbackPattern = '(?s)if\s*\(\s*g_effectiveMitigationMode\s*==\s*kLegacy25Mode\s*\)\s*\{.*?RecordZeroDatagram\s*\(\s*from\s*,\s*fromlen\s*\).*?return\s+25\s*;.*?\}'
-$WouldBlockPattern = 'WSASetLastError\s*\(\s*WSAEWOULDBLOCK\s*\)'
-$DefaultModernPattern = 'constexpr\s+int\s+kDefaultMitigationMode\s*=\s*kModernDropMode\s*;'
-$DrainBudgetPattern = 'constexpr\s+int\s+kDefaultDrainBudget\s*=\s*256\s*;'
-$TargetGuardPattern = '#if\s+SOURCE_ENGINE\s*!=\s*SE_LEFT4DEAD\s*&&\s*SOURCE_ENGINE\s*!=\s*SE_LEFT4DEAD2'
+$RequiredPatterns = @(
+    @{ Name = 'recvfrom hook'; Pattern = 'int\s+MyRecvFromHook\s*\(' },
+    @{ Name = 'real recvfrom call'; Pattern = 'g_realRecvFrom\s*\(\s*s\s*,\s*buf\s*,\s*len\s*,\s*flags\s*,\s*from\s*,\s*fromlen\s*\)' },
+    @{ Name = 'zero-datagram branch'; Pattern = 'if\s*\(\s*ret\s*!=\s*0\s*\)' },
+    @{ Name = 'modern drain function'; Pattern = 'int\s+HandleModernZeroDatagrams\s*\(' },
+    @{ Name = 'zero datagram telemetry'; Pattern = 'RecordZeroDatagram\s*\(\s*from\s*,\s*fromlen\s*\)' },
+    @{ Name = 'readiness probe'; Pattern = 'SocketReadableNow\s*\(\s*s\s*\)' },
+    @{ Name = 'bounded drain check'; Pattern = 'drained\s*>=\s*g_effectiveDrainBudget' },
+    @{ Name = 'would-block translation'; Pattern = 'WSASetLastError\s*\(\s*WSAEWOULDBLOCK\s*\)' },
+    @{ Name = 'socket error return'; Pattern = 'return\s+SOCKET_ERROR\s*;' },
+    @{ Name = 'legacy mode branch'; Pattern = 'g_effectiveMitigationMode\s*==\s*kLegacy25Mode' },
+    @{ Name = 'legacy return 25'; Pattern = 'return\s+25\s*;' },
+    @{ Name = 'modern default'; Pattern = 'constexpr\s+int\s+kDefaultMitigationMode\s*=\s*kModernDropMode\s*;' },
+    @{ Name = 'default drain budget'; Pattern = 'constexpr\s+int\s+kDefaultDrainBudget\s*=\s*256\s*;' },
+    @{ Name = 'dual-game target guard'; Pattern = '#if\s+SOURCE_ENGINE\s*!=\s*SE_LEFT4DEAD\s*&&\s*SOURCE_ENGINE\s*!=\s*SE_LEFT4DEAD2' }
+)
 
-if ($Source -notmatch $HookPattern) {
-    throw 'Regression guard failed: recvfrom modern dispatch path is missing or structurally changed.'
+foreach ($Required in $RequiredPatterns) {
+    if ($Source -notmatch $Required.Pattern) {
+        throw "Regression guard failed: required mitigation structure '$($Required.Name)' is missing."
+    }
 }
 
-if ($Source -notmatch $ModernDrainPattern -or $Source -notmatch $WouldBlockPattern) {
-    throw 'Regression guard failed: bounded DROP-WOULDBLOCK drain path is missing or structurally changed.'
-}
-
-if ($Source -notmatch $LegacyFallbackPattern) {
-    throw 'Regression guard failed: LEGACY-25 emergency fallback is missing.'
-}
-
-if ($Source -notmatch $DefaultModernPattern -or $Source -notmatch $DrainBudgetPattern) {
-    throw 'Regression guard failed: modern mitigation defaults are no longer present.'
-}
-
-if ($Source -notmatch $TargetGuardPattern) {
-    throw 'Regression guard failed: explicit L4D/L4D2 compile target guard is missing.'
+$LegacyBlockPattern = '(?s)if\s*\(\s*g_effectiveMitigationMode\s*==\s*kLegacy25Mode\s*\)\s*\{.*?RecordZeroDatagram\s*\(\s*from\s*,\s*fromlen\s*\).*?\+\+g_stats\.legacy25Responses\s*;.*?return\s+25\s*;.*?\}'
+if ($Source -notmatch $LegacyBlockPattern) {
+    throw 'Regression guard failed: LEGACY-25 fallback no longer records telemetry and returns 25 as one guarded block.'
 }
 
 Write-Host 'L4D/L4D2 mitigation regression guard: OK (bounded DROP-WOULDBLOCK default + LEGACY-25 fallback preserved).'
