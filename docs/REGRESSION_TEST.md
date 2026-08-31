@@ -2,7 +2,7 @@
 
 This procedure validates that a new DoS Protect build still blocks the same real-world UDP attack case that motivated the original plugin.
 
-`2.0.0-dev.3` changes the default zero-length datagram response from `LEGACY-25` to `DROP-WOULDBLOCK`. The source/CI guard verifies that both paths remain present, but runtime acceptance must still be performed on actual L4D1 and L4D2 dedicated servers.
+`2.0.0-dev.3` changes the default zero-length datagram response from `LEGACY-25` to the bounded `DROP-WOULDBLOCK` strategy. The source/CI guard verifies that both paths remain present, but runtime acceptance must still be performed on actual L4D1 and L4D2 dedicated servers.
 
 ## Required builds
 
@@ -17,12 +17,14 @@ Modern default:
 
 ```text
 dosp_mitigation_mode 1
+dosp_drain_budget 256
 ```
 
 Expected status:
 
 ```text
 Mitigation: DROP-WOULDBLOCK
+Drain budget: 256 zero datagrams/call
 ```
 
 Known-working fallback:
@@ -37,7 +39,7 @@ Expected status:
 Mitigation: LEGACY-25
 ```
 
-Changing the mode does not require a server restart.
+Changing the mitigation mode does not require a server restart.
 
 ## Test each game independently
 
@@ -62,17 +64,35 @@ Do not accept a protection result if the control condition cannot reproduce the 
 4. Run `dosp_status` and verify:
    - `Status: ENABLED`
    - `Mitigation: DROP-WOULDBLOCK`
+   - `Drain budget: 256 zero datagrams/call` unless intentionally changed
    - the expected game and binary are shown.
 5. Reproduce the same controlled UDP test case with the same test setup used for the control.
 6. Confirm the disruptive server effect is blocked or materially mitigated to the same degree as the known-working legacy build.
 7. Run `dosp_status` and verify:
    - `Total zero UDP intercepted` increased;
    - `Modern drops` increased;
-   - `Legacy-25 responses` remains zero unless the fallback was selected manually.
+   - `Legacy-25 responses` remains zero unless the fallback was selected manually;
+   - `Drain budget hits` is recorded.
 8. Run `dosp_top` and verify source accounting is plausible when a valid IPv4 source is available.
 9. Confirm normal player connections, gameplay and server query behavior still work during and after the protected test.
 
-### 3. A/B compare with LEGACY-25
+### 3. Interpret drain-budget telemetry
+
+`Drain budget hits` counts hook invocations that consumed the configured maximum number of consecutive zero-length datagrams before yielding back to the engine.
+
+- `0` or occasional hits: the current budget is comfortably draining the observed burst pattern.
+- repeated/rapidly increasing hits while the server remains healthy: record the value and PPS; the protection is reaching its configured work cap but may still be sufficient.
+- repeated hits together with renewed disruption or query starvation: stop the test, record telemetry, and compare with `LEGACY-25` before changing the budget.
+
+The budget is adjustable at runtime:
+
+```text
+dosp_drain_budget 256
+```
+
+Effective range: `1..4096`. Do not increase it blindly during production traffic; the bound exists to prevent one receive callback from monopolizing the server thread.
+
+### 4. A/B compare with LEGACY-25
 
 If modern mode fails to block the known issue, behaves differently from the accepted baseline, or causes a compatibility regression:
 
@@ -90,19 +110,19 @@ dosp_mitigation_mode 0
 
 The ability to switch modes at runtime is specifically intended to make this comparison deterministic and fast.
 
-### 4. Validate protection toggling
+### 5. Validate protection toggling
 
 1. Run `dosp_enable 0`.
 2. Run `dosp_status` and verify `Status: DISABLED`.
 3. Run `dosp_enable 1`.
 4. Run `dosp_status` and verify `Status: ENABLED` and the hook reactivates without requiring a restart.
 
-### 5. Validate telemetry reset
+### 6. Validate telemetry reset
 
 1. Record the current counters from `dosp_status`.
 2. Run `dosp_reset`.
 3. Verify counters and retained sources reset to zero/empty.
-4. Verify protection state and selected mitigation mode remain unchanged.
+4. Verify protection state, selected mitigation mode and drain budget remain unchanged.
 5. Repeat a short controlled protection test and confirm counters begin increasing again.
 
 ## Acceptance criteria for DROP-WOULDBLOCK
@@ -114,9 +134,11 @@ The modern mode is accepted only when all of the following are true for both L4D
 - With `dosp_mitigation_mode 1`, the same test case is blocked to the expected degree.
 - `dosp_status` confirms `DROP-WOULDBLOCK` and increments `Modern drops`.
 - No fabricated positive receive length is used by the active modern path.
+- Queued zero-length datagrams are drained without unbounded looping.
+- If a real datagram is encountered during draining, ordinary player/query traffic remains functional.
 - Player connections, gameplay, Steam/server queries and ordinary UDP traffic remain functional.
 - Disabling and re-enabling the hook works without a server restart.
-- Telemetry reset does not alter protection state or mitigation selection.
+- Telemetry reset does not alter protection state, mitigation selection or drain budget.
 
 ## Change-control rule
 
