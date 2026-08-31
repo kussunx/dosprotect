@@ -1,8 +1,8 @@
 # DoS Protect
 
-Modern revamp of the original **DoS Protect** Metamod:Source plugin for **Left 4 Dead 1**.
+Modern revamp of the original **DoS Protect** Metamod:Source plugin for **Left 4 Dead** and **Left 4 Dead 2**.
 
-The project intentionally preserves the legacy UDP mitigation that has proven effective in L4D1 deployments: when the hooked `recvfrom()` path returns a zero-length datagram, the compatibility path records the source and returns `25` to the engine. This behavior is regression-guarded and must not be removed or altered without a verified replacement that blocks the same attack case.
+The project intentionally preserves the legacy UDP mitigation that has proven effective in production: when the hooked `recvfrom()` path returns a zero-length datagram, the compatibility path records the source and returns `25` to the engine. This behavior is regression-guarded and must not be removed or altered without a verified replacement that blocks the same attack case.
 
 ## Authorship
 
@@ -15,20 +15,22 @@ This repository is a substantial modernization effort based on the original DoS 
 
 `2.0.0-dev.1`
 
-This is the first build-ready revamp baseline. The mitigation behavior remains intentionally compatible with the original implementation while the surrounding build and maintenance infrastructure has been modernized.
+This is the first build-ready dual-target revamp baseline. The mitigation behavior remains intentionally compatible with the original implementation while the surrounding build and maintenance infrastructure is modernized.
 
-## Target
+## Supported targets
 
-- Game: Left 4 Dead 1
-- Engine: Source / `SE_LEFT4DEAD`
-- Metamod:Source: 1.12 development line, pinned for reproducible builds
-- Platform: Windows
-- Architecture: x86 / Win32
-- Compiler: Microsoft C++ toolchain from the installed Visual Studio instance
+| Game | HL2SDK | `SOURCE_ENGINE` | Platform | Artifact |
+| --- | --- | ---: | --- | --- |
+| Left 4 Dead | `l4d` | `8` | Windows x86 / Win32 | `dosprotect-l4d-win32` |
+| Left 4 Dead 2 | `l4d2` | `9` | Windows x86 / Win32 | `dosprotect-l4d2-win32` |
+
+Both binaries are produced from the same source tree. The packet-handling logic is not forked between games.
 
 ## Repository layout
 
 ```text
+build/
+  dependencies.psd1
 src/
   extension.cpp
   extension.h
@@ -43,12 +45,13 @@ dosprotect.vdf
 
 ## Pinned upstream dependencies
 
-The build script pins exact upstream revisions so that a future SDK change cannot silently alter the binary produced by this baseline:
+Exact upstream revisions are stored in `build/dependencies.psd1` so SDK updates cannot silently change the binary produced by this baseline:
 
-- Metamod:Source: `afc8233eedcd0c832b411c1da852328328db5c50`
+- Metamod:Source `1.12-dev`: `afc8233eedcd0c832b411c1da852328328db5c50`
 - HL2SDK `l4d`: `0a8e862697335b12976a124daf728c38e975e381`
+- HL2SDK `l4d2`: `2a31cd007b2d7d2f964dc093eedcf7a812cf9dd6`
 
-The script downloads these repositories automatically. They are not vendored into this repository.
+The build script downloads these repositories automatically and caches them outside the tracked source tree.
 
 ## Local build
 
@@ -59,23 +62,35 @@ Requirements:
 - Git
 - PowerShell
 
-From the repository root:
+Build both games:
 
 ```powershell
-.\scripts\build.ps1
+.\scripts\build.ps1 -Target all
 ```
 
-To discard cached upstream dependencies and fetch them again:
+Build only Left 4 Dead:
 
 ```powershell
-.\scripts\build.ps1 -CleanDeps
+.\scripts\build.ps1 -Target l4d
 ```
 
-The script discovers Visual Studio with `vswhere.exe`, initializes an x86 developer environment through `VsDevCmd.bat`, compiles with the installed `cl.exe`, links against the pinned L4D HL2SDK libraries and validates that the result is an x86 PE DLL.
+Build only Left 4 Dead 2:
+
+```powershell
+.\scripts\build.ps1 -Target l4d2
+```
+
+To discard cached dependencies and fetch the pinned revisions again:
+
+```powershell
+.\scripts\build.ps1 -Target all -CleanDeps
+```
+
+The script discovers Visual Studio with `vswhere.exe`, initializes an x86 developer environment through `VsDevCmd.bat`, compiles with the installed `cl.exe`, links against the correct HL2SDK libraries and validates each result as an x86 PE DLL using `dumpbin.exe`.
 
 ## Build output
 
-Successful builds create:
+L4D:
 
 ```text
 artifacts/dosprotect-l4d-win32/
@@ -86,18 +101,39 @@ artifacts/dosprotect-l4d-win32/
         dosprotect_mm.pdb
     metamod/
       dosprotect.vdf
+  README.md
   build-info.txt
 ```
 
-`build-info.txt` contains the dependency revisions, compiler identity and DLL SHA-256.
+L4D2:
+
+```text
+artifacts/dosprotect-l4d2-win32/
+  addons/
+    dosprotect/
+      bin/
+        dosprotect_mm.dll
+        dosprotect_mm.pdb
+    metamod/
+      dosprotect.vdf
+  README.md
+  build-info.txt
+```
+
+Each `build-info.txt` records the target, dependency revisions, compiler identity and DLL SHA-256.
 
 ## GitHub Actions / self-hosted runner
 
-The workflow targets `self-hosted` without requiring the runner name to also be configured as a custom label. On this repository the intended runner is the Dev VM runner named `dosprotect`; `scripts/build.ps1` additionally rejects non-Windows hosts.
+`.github/workflows/build.yml` runs a two-target matrix on the repository self-hosted Windows runner. The intended runner is the Dev VM runner named `dosprotect`.
 
-It runs on pushes to `main`, pull requests targeting `main`, and manual `workflow_dispatch` runs. The package is uploaded as the `dosprotect-l4d-win32` Actions artifact when GitHub artifact storage is available. Artifact-quota exhaustion is treated as a storage/infrastructure warning and does not invalidate a successful compile, link, x86 validation or SHA-256 calculation; build metadata remains visible in the workflow log.
+Every push to `main`, pull request targeting `main`, or manual workflow run builds both:
 
-When an in-repository pull request is merged, the workflow also removes its merged head branch automatically to keep the repository clean.
+- `dosprotect-l4d-win32`
+- `dosprotect-l4d2-win32`
+
+Each artifact contains the appropriate game-specific DLL packaged under the same Metamod install layout.
+
+Merged in-repository pull request branches are automatically removed by the workflow to keep the repository clean.
 
 ## Regression guard
 
@@ -111,15 +147,24 @@ if (ret == 0)
 }
 ```
 
-This is not a substitute for the real L4D attack regression test. It prevents accidental source refactors from deleting the known working behavior before runtime testing occurs.
+This is not a substitute for the real attack regression test. It prevents accidental refactors from deleting the known working behavior before runtime testing occurs.
 
-## Installation
+## Installation — Left 4 Dead
 
-Copy the packaged `addons` directory into the L4D `left4dead` game directory so the resulting paths are:
+Copy the packaged `addons` directory from `dosprotect-l4d-win32` into the L4D game directory so the resulting paths are:
 
 ```text
 left4dead/addons/dosprotect/bin/dosprotect_mm.dll
 left4dead/addons/metamod/dosprotect.vdf
+```
+
+## Installation — Left 4 Dead 2
+
+Copy the packaged `addons` directory from `dosprotect-l4d2-win32` into the L4D2 game directory so the resulting paths are:
+
+```text
+left4dead2/addons/dosprotect/bin/dosprotect_mm.dll
+left4dead2/addons/metamod/dosprotect.vdf
 ```
 
 Restart the server and verify the plugin through Metamod:
@@ -138,13 +183,14 @@ dosp_status
 
 ## Compatibility policy
 
-The following sequence is mandatory for changes to the packet-handling path:
+Changes to packet handling must be validated separately on both games:
 
 1. Build the known-compatible baseline.
-2. Confirm the known L4D attack is blocked.
-3. Apply the proposed packet-handling change.
-4. Rebuild and repeat the same attack test.
-5. Accept the change only if protection remains equivalent or improves.
+2. Confirm the known attack is blocked on L4D.
+3. Confirm the known attack is blocked on L4D2.
+4. Apply the proposed packet-handling change.
+5. Rebuild both targets and repeat the same tests.
+6. Accept the change only if protection remains equivalent or improves on both games.
 
 ## License
 
