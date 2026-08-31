@@ -27,12 +27,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Verify legacy mitigation
-        shell: powershell
-        run: .\scripts\verify-legacy-mitigation.ps1
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-legacy-mitigation.ps1
 
       - name: Build and package
-        shell: powershell
-        run: .\scripts\build.ps1
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
 
       - name: Upload package
         uses: actions/upload-artifact@v4
