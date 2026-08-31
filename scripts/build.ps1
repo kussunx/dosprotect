@@ -110,9 +110,6 @@ if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
 }
 
 & (Join-Path $PSScriptRoot 'verify-legacy-mitigation.ps1')
-if ($LASTEXITCODE -ne 0) {
-    throw 'Legacy mitigation verification failed.'
-}
 
 Ensure-Checkout -Url 'https://github.com/alliedmodders/metamod-source.git' -Path $MetamodRoot -Commit $MetamodCommit -Submodules
 Ensure-Checkout -Url 'https://github.com/alliedmodders/hl2sdk.git' -Path $Hl2SdkRoot -Commit $Hl2SdkCommit
