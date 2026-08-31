@@ -1,17 +1,10 @@
 #ifndef _INCLUDE_SOURCEMOD_PLATFORM_H_
 #define _INCLUDE_SOURCEMOD_PLATFORM_H_
 
-#if defined WIN32 && !defined snprintf
-#define snprintf _snprintf
-#endif
-
 #if defined WIN32 || defined WIN64
 #define PLATFORM_WINDOWS
 #if !defined WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
-#endif
-#if !defined snprintf
-#define snprintf _snprintf
 #endif
 #if !defined stat
 #define stat _stat
