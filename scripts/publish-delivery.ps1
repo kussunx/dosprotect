@@ -23,7 +23,7 @@ Copy-Item (Join-Path $ArtifactRoot 'build-info.txt') $DeliveryRoot -Force
 
 git config user.name 'github-actions[bot]'
 git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-git add "delivery/$Target"
+git add -f "delivery/$Target"
 git commit -m "delivery: $Target recompiled binaries"
 if ($LASTEXITCODE -ne 0) { throw 'git commit failed' }
 git push --force origin "HEAD:refs/heads/delivery/$Target"
