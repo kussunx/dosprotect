@@ -2,7 +2,7 @@
 
 Modern revamp of the original **DoS Protect** Metamod:Source plugin for **Left 4 Dead** and **Left 4 Dead 2**.
 
-The project now uses a standards-oriented zero-length UDP filtering strategy by default: the real `recvfrom()` consumes the datagram, DoS Protect records it, and the hook returns the normal non-blocking "no deliverable packet" result (`SOCKET_ERROR` with `WSAEWOULDBLOCK` on Windows) instead of fabricating a positive byte count.
+The project now uses a standards-oriented zero-length UDP filtering strategy by default. The real `recvfrom()` consumes zero-length datagrams, DoS Protect drains them in a bounded loop, forwards the first real packet unchanged if one is already queued, and otherwise reports the normal non-blocking "no deliverable packet" result (`SOCKET_ERROR` with `WSAEWOULDBLOCK` on Windows). No positive byte count is fabricated by the modern path.
 
 The known-working `LEGACY-25` behavior remains available as a runtime fallback while the modern path is validated against the same real attack case on both games.
 
@@ -17,7 +17,7 @@ This repository is a substantial modernization based on the original DoS Protect
 
 `2.0.0-dev.3`
 
-This revision introduces the modern `DROP-WOULDBLOCK` mitigation as the default while retaining `LEGACY-25` as an immediate A/B fallback.
+This revision introduces the bounded `DROP-WOULDBLOCK` mitigation as the default while retaining `LEGACY-25` as an immediate A/B fallback.
 
 ## Supported targets
 
@@ -42,20 +42,17 @@ Reported as:
 Mitigation: DROP-WOULDBLOCK
 ```
 
-The hot path is:
+Modern handling works as follows:
 
-```cpp
-const int ret = g_realRecvFrom(...);
-if (ret == 0)
-{
-    RecordZeroDatagram(...);
-    WSASetLastError(WSAEWOULDBLOCK);
-    return SOCKET_ERROR;
-}
-return ret;
-```
+1. Call the real `recvfrom()`.
+2. If it returns a normal packet or a socket error, return that result unchanged.
+3. If it returns a zero-length UDP datagram, record and discard it.
+4. Check whether the socket is immediately readable using a zero-timeout `select()`.
+5. If more traffic is queued, continue receiving and discard additional zero-length datagrams up to the configured drain budget.
+6. If a real packet is encountered, return its real length and buffer/address data unchanged to the engine.
+7. If no deliverable packet remains, or the drain budget is reached, return `SOCKET_ERROR` and set `WSAEWOULDBLOCK`.
 
-The zero-length UDP datagram has already been consumed by the real socket call. Returning the normal non-blocking "nothing deliverable" result prevents the Source engine packet parser from receiving the zero-length datagram without claiming that bytes exist in the receive buffer.
+This avoids both problems with the original workaround: it does not claim that nonexistent payload bytes were received, and it does not stop after consuming only one attack datagram when a burst of zero-length packets is already queued.
 
 ### Legacy fallback
 
@@ -94,6 +91,7 @@ The original plugin kept a linear linked list of heap-allocated IP records for t
 - validated `sockaddr`/`fromlen` handling before reading IPv4 data;
 - total, current, last and peak PPS telemetry;
 - separate counters for modern drops and legacy fallback responses;
+- bounded modern receive draining with drain-budget hit telemetry;
 - `dosp_top` ranked-source diagnostics;
 - `dosp_reset` telemetry reset without disabling protection;
 - safer/idempotent hook installation and removal;
@@ -110,7 +108,7 @@ The original plugin kept a linear linked list of heap-allocated IP records for t
 dosp_status
 ```
 
-Shows version, game, binary, hook state, active mitigation, total zero-length UDP interceptions, modern/legacy response counts, tracked source count, invalid-source count, table-full count, expired records, PPS telemetry and the top tracked sources.
+Shows version, game, binary, hook state, active mitigation, drain budget, total zero-length UDP interceptions, modern/legacy response counts, drain-budget hits, tracked source count, invalid-source count, table-full count, expired records, PPS telemetry and the top tracked sources.
 
 ```text
 dosp_top
@@ -146,6 +144,14 @@ dosp_mitigation_mode 1
 - `0`: `LEGACY-25` fallback.
 
 The mode changes immediately at runtime.
+
+```text
+dosp_drain_budget 256
+```
+
+Maximum number of zero-length UDP datagrams the modern path will consume in one engine `recvfrom` hook call before yielding with `WSAEWOULDBLOCK`. Effective range: `1..4096`.
+
+The default is intentionally bounded so the plugin can drain bursts without allowing one network callback to monopolize the server thread. `dosp_status` reports `Drain budget hits`; repeated hits during a known test indicate that the budget is being saturated.
 
 ```text
 dosp_max_sources 4096
@@ -290,6 +296,7 @@ For `dev.3`, the expected default status is:
 Status: ENABLED
 Mitigation: DROP-WOULDBLOCK
 Legacy fallback: available (dosp_mitigation_mode 0)
+Drain budget: 256 zero datagrams/call
 ```
 
 ## Runtime regression policy
