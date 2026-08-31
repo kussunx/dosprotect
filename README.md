@@ -13,7 +13,7 @@ The plugin is intentionally focused on this specific packet condition. It is not
 | Left 4 Dead | Windows x86 | `dosprotect_l4d1_mm.dll` |
 | Left 4 Dead 2 | Windows x86 | `dosprotect_l4d2_mm.dll` |
 
-Metamod:Source is required.
+The 2.0.0 release is built and tested with **Metamod:Source 1.12-dev**, pinned at commit `afc8233eedcd0c832b411c1da852328328db5c50`.
 
 ## How it works
 
@@ -24,6 +24,8 @@ When Winsock returns a zero-length UDP datagram, the plugin consumes it instead 
 The drain budget keeps one receive callback from monopolizing the server thread during a burst.
 
 ## Installation
+
+Metamod:Source must already be installed.
 
 ### Left 4 Dead
 
