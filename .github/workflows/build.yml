@@ -1,4 +1,4 @@
-name: Build L4D1 Win32
+name: Build DoS Protect
 
 on:
   push:
@@ -24,9 +24,16 @@ concurrency:
 jobs:
   build:
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
-    name: L4D1 / Windows x86
+    name: ${{ matrix.target }} / Windows x86
     runs-on: self-hosted
-    timeout-minutes: 20
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - l4d
+          - l4d2
 
     steps:
       - name: Checkout
@@ -36,20 +43,19 @@ jobs:
         shell: cmd
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-legacy-mitigation.ps1
 
-      - name: Build and package
+      - name: Build and package ${{ matrix.target }}
         shell: cmd
-        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1 -Target ${{ matrix.target }} -Configuration Release
 
       - name: Report build metadata
         shell: cmd
-        run: type artifacts\dosprotect-l4d-win32\build-info.txt
+        run: type artifacts\dosprotect-${{ matrix.target }}-win32\build-info.txt
 
-      - name: Upload package (best effort)
-        continue-on-error: true
+      - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: dosprotect-l4d-win32
-          path: artifacts/dosprotect-l4d-win32/**
+          name: dosprotect-${{ matrix.target }}-win32
+          path: artifacts/dosprotect-${{ matrix.target }}-win32/**
           if-no-files-found: error
           retention-days: 14
 
