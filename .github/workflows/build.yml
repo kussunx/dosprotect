@@ -51,7 +51,8 @@ jobs:
         shell: cmd
         run: type artifacts\dosprotect-${{ matrix.target }}-win32\build-info.txt
 
-      - name: Upload package
+      - name: Upload package (best effort)
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: dosprotect-${{ matrix.target }}-win32
