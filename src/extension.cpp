@@ -3,177 +3,490 @@
  * Revamp and current maintenance: Kussun
  * Based on the original DoS Protect by ZombieX2.net
  *
- * Compatibility note:
+ * Compatibility contract:
  * The legacy recvfrom() mitigation (ret == 0 -> return 25) is intentionally
  * preserved because it is regression-sensitive behavior for L4D and L4D2.
  */
 
 #include "extension.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <unordered_map>
+#include <vector>
+
 #if SOURCE_ENGINE != SE_LEFT4DEAD && SOURCE_ENGINE != SE_LEFT4DEAD2
 #error DoS Protect revamp currently supports only Left 4 Dead and Left 4 Dead 2.
 #endif
 
-#if SOURCE_ENGINE >= 3
 #define CallGlobalChangeCallback CallGlobalChangeCallbacks
 SH_DECL_HOOK3_void(ICvar, CallGlobalChangeCallback, SH_NOATTRIB, false, ConVar *, const char *, float);
-ICvar *icvar = NULL;
-ConVar *pConVar_dosp_enable = NULL;
+
+namespace
+{
+using Clock = std::chrono::steady_clock;
+using TimePoint = Clock::time_point;
+using RecvFromFn = int (*)(int, char *, int, int, struct sockaddr *, int *);
+
+#if SOURCE_ENGINE == SE_LEFT4DEAD
+constexpr const char *kGameName = "Left 4 Dead";
+constexpr const char *kBinaryName = "dosprotect_l4d1_mm";
+#else
+constexpr const char *kGameName = "Left 4 Dead 2";
+constexpr const char *kBinaryName = "dosprotect_l4d2_mm";
 #endif
 
-DoSProtect g_DoSProtect;
-SourceHook::List<DoSCount *> m_pDoSAddr;
-bool g_recvfrom_hooked = false;
-int (*g_real_recvfrom_ptr)(int, char *, int, int, struct sockaddr *, int *);
+constexpr int kDefaultMaxSources = 4096;
+constexpr int kMinMaxSources = 128;
+constexpr int kMaxMaxSources = 65536;
+constexpr int kDefaultExpireSeconds = 900;
+constexpr int kMaxExpireSeconds = 86400;
+constexpr int kMaintenanceIntervalSeconds = 5;
+constexpr size_t kStatusTopLimit = 10;
+constexpr size_t kTopCommandLimit = 20;
 
-PLUGIN_EXPOSE(DoSProtect, g_DoSProtect);
-
-void AddDoSCount(int ip1, int ip2, int ip3, int ip4)
+struct DoSRecord
 {
-    SourceHook::List<DoSCount *>::iterator iter;
-    DoSCount *pInfo;
-    for (iter = m_pDoSAddr.begin(); iter != m_pDoSAddr.end(); iter++)
+    uint64_t count;
+    TimePoint firstSeen;
+    TimePoint lastSeen;
+};
+
+struct DoSStats
+{
+    uint64_t totalIntercepted = 0;
+    uint64_t invalidSourcePackets = 0;
+    uint64_t untrackedSourcePackets = 0;
+    uint64_t expiredRecords = 0;
+    uint64_t currentWindowPackets = 0;
+    uint64_t lastPps = 0;
+    uint64_t peakPps = 0;
+    TimePoint ppsWindowStart = Clock::now();
+};
+
+struct IPv4Hash
+{
+    size_t operator()(uint32_t value) const noexcept
     {
-        pInfo = (*iter);
-        if (ip1 == pInfo->ip[0] && ip2 == pInfo->ip[1] && ip3 == pInfo->ip[2] && ip4 == pInfo->ip[3])
+        static const uint64_t seed =
+            static_cast<uint64_t>(Clock::now().time_since_epoch().count()) ^ 0x9E3779B97F4A7C15ULL;
+
+        uint64_t z = static_cast<uint64_t>(value) + seed + 0x9E3779B97F4A7C15ULL;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+        z ^= (z >> 31);
+        return static_cast<size_t>(z);
+    }
+};
+
+struct RankedRecord
+{
+    uint32_t ip;
+    uint64_t count;
+    uint64_t ageSeconds;
+};
+
+ICvar *g_icvar = nullptr;
+ConVar *g_dospEnable = nullptr;
+ConVar *g_dospMaxSources = nullptr;
+ConVar *g_dospExpireSeconds = nullptr;
+
+std::unordered_map<uint32_t, DoSRecord, IPv4Hash> g_attackers;
+DoSStats g_stats;
+TimePoint g_nextMaintenance = Clock::now();
+
+bool g_recvfromHooked = false;
+RecvFromFn g_realRecvFrom = nullptr;
+int g_effectiveMaxSources = kDefaultMaxSources;
+int g_effectiveExpireSeconds = kDefaultExpireSeconds;
+
+int ClampInt(int value, int minimum, int maximum)
+{
+    if (value < minimum)
+        return minimum;
+    if (value > maximum)
+        return maximum;
+    return value;
+}
+
+void RefreshRuntimeConfig()
+{
+    if (g_dospMaxSources)
+    {
+        g_effectiveMaxSources = ClampInt(g_dospMaxSources->GetInt(), kMinMaxSources, kMaxMaxSources);
+    }
+    else
+    {
+        g_effectiveMaxSources = kDefaultMaxSources;
+    }
+
+    if (g_dospExpireSeconds)
+    {
+        g_effectiveExpireSeconds = ClampInt(g_dospExpireSeconds->GetInt(), 0, kMaxExpireSeconds);
+    }
+    else
+    {
+        g_effectiveExpireSeconds = kDefaultExpireSeconds;
+    }
+
+    if (g_attackers.bucket_count() < static_cast<size_t>(g_effectiveMaxSources))
+    {
+        g_attackers.reserve(static_cast<size_t>(g_effectiveMaxSources));
+    }
+}
+
+void RollPpsWindow(const TimePoint now)
+{
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_stats.ppsWindowStart).count();
+    if (elapsedMs < 1000)
+        return;
+
+    const uint64_t elapsedSeconds = static_cast<uint64_t>(std::max<int64_t>(1, elapsedMs / 1000));
+    g_stats.lastPps = g_stats.currentWindowPackets / elapsedSeconds;
+    g_stats.peakPps = std::max(g_stats.peakPps, g_stats.lastPps);
+    g_stats.currentWindowPackets = 0;
+    g_stats.ppsWindowStart = now;
+}
+
+void ResetTelemetry()
+{
+    g_attackers.clear();
+    g_attackers.rehash(0);
+    g_attackers.reserve(static_cast<size_t>(g_effectiveMaxSources));
+
+    g_stats = DoSStats{};
+    const TimePoint now = Clock::now();
+    g_stats.ppsWindowStart = now;
+    g_nextMaintenance = now + std::chrono::seconds(kMaintenanceIntervalSeconds);
+}
+
+void MaybeExpireRecords(const TimePoint now)
+{
+    if (now < g_nextMaintenance)
+        return;
+
+    g_nextMaintenance = now + std::chrono::seconds(kMaintenanceIntervalSeconds);
+
+    if (g_effectiveExpireSeconds <= 0 || g_attackers.empty())
+        return;
+
+    const auto expiry = std::chrono::seconds(g_effectiveExpireSeconds);
+    uint64_t removed = 0;
+
+    for (auto iter = g_attackers.begin(); iter != g_attackers.end();)
+    {
+        if ((now - iter->second.lastSeen) >= expiry)
         {
-            pInfo->count++;
-            return;
+            iter = g_attackers.erase(iter);
+            ++removed;
+        }
+        else
+        {
+            ++iter;
         }
     }
 
-    DoSCount *d = new DoSCount;
-    d->ip[0] = ip1;
-    d->ip[1] = ip2;
-    d->ip[2] = ip3;
-    d->ip[3] = ip4;
-    d->count = 1;
-    m_pDoSAddr.push_back(d);
+    g_stats.expiredRecords += removed;
 }
 
-void UnHookRecvFrom()
+bool TryExtractIPv4(const struct sockaddr *from, const int *fromlen, uint32_t *ip)
 {
-    if (g_recvfrom_hooked)
+    if (!from || !fromlen || !ip)
+        return false;
+
+    if (*fromlen < static_cast<int>(sizeof(sockaddr_in)))
+        return false;
+
+    if (from->sa_family != AF_INET)
+        return false;
+
+    const auto *address = reinterpret_cast<const sockaddr_in *>(from);
+    *ip = static_cast<uint32_t>(address->sin_addr.s_addr);
+    return true;
+}
+
+void RecordZeroDatagram(const struct sockaddr *from, const int *fromlen)
+{
+    const TimePoint now = Clock::now();
+
+    RollPpsWindow(now);
+    ++g_stats.totalIntercepted;
+    ++g_stats.currentWindowPackets;
+    g_stats.peakPps = std::max(g_stats.peakPps, g_stats.currentWindowPackets);
+
+    MaybeExpireRecords(now);
+
+    uint32_t ip = 0;
+    if (!TryExtractIPv4(from, fromlen, &ip))
     {
-        g_pVCR->Hook_recvfrom = g_real_recvfrom_ptr;
-        g_recvfrom_hooked = false;
-        META_CONPRINT("[-] DoS Attack Protect - Disable\n");
+        ++g_stats.invalidSourcePackets;
+        return;
+    }
+
+    auto found = g_attackers.find(ip);
+    if (found != g_attackers.end())
+    {
+        ++found->second.count;
+        found->second.lastSeen = now;
+        return;
+    }
+
+    if (g_attackers.size() >= static_cast<size_t>(g_effectiveMaxSources))
+    {
+        ++g_stats.untrackedSourcePackets;
+        return;
+    }
+
+    g_attackers.emplace(ip, DoSRecord{1, now, now});
+}
+
+uint64_t SecondsSince(const TimePoint now, const TimePoint then)
+{
+    const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now - then).count();
+    return seconds > 0 ? static_cast<uint64_t>(seconds) : 0;
+}
+
+void PrintIp(uint32_t ip)
+{
+    const uint32_t host = ntohl(ip);
+    META_CONPRINTF(
+        "%u.%u.%u.%u",
+        static_cast<unsigned int>((host >> 24) & 0xFF),
+        static_cast<unsigned int>((host >> 16) & 0xFF),
+        static_cast<unsigned int>((host >> 8) & 0xFF),
+        static_cast<unsigned int>(host & 0xFF));
+}
+
+void PrintTopSources(size_t limit)
+{
+    const TimePoint now = Clock::now();
+    RollPpsWindow(now);
+    MaybeExpireRecords(now);
+
+    std::vector<RankedRecord> ranked;
+    ranked.reserve(g_attackers.size());
+
+    for (const auto &entry : g_attackers)
+    {
+        ranked.push_back(RankedRecord{
+            entry.first,
+            entry.second.count,
+            SecondsSince(now, entry.second.lastSeen)});
+    }
+
+    std::sort(ranked.begin(), ranked.end(), [](const RankedRecord &left, const RankedRecord &right) {
+        if (left.count != right.count)
+            return left.count > right.count;
+        return left.ageSeconds < right.ageSeconds;
+    });
+
+    const size_t count = std::min(limit, ranked.size());
+    if (count == 0)
+    {
+        META_CONPRINT(" No tracked sources.\n");
+        return;
+    }
+
+    META_CONPRINT(" Source IP       | Packets      | Last seen\n");
+    META_CONPRINT("------------------------------------------------\n");
+    for (size_t index = 0; index < count; ++index)
+    {
+        META_CONPRINT(" ");
+        PrintIp(ranked[index].ip);
+        META_CONPRINTF(
+            " | %-12llu | %llu sec ago\n",
+            static_cast<unsigned long long>(ranked[index].count),
+            static_cast<unsigned long long>(ranked[index].ageSeconds));
     }
 }
 
 int MyRecvFromHook(int s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen)
 {
-    int ret = g_real_recvfrom_ptr(s, buf, len, flags, from, fromlen);
+    if (!g_realRecvFrom)
+        return SOCKET_ERROR;
+
+    const int ret = g_realRecvFrom(s, buf, len, flags, from, fromlen);
     if (ret == 0)
     {
-        AddDoSCount(
-            (unsigned char)from->sa_data[2],
-            (unsigned char)from->sa_data[3],
-            (unsigned char)from->sa_data[4],
-            (unsigned char)from->sa_data[5]);
-        return 25;
+        RecordZeroDatagram(from, fromlen);
+        return 25; // LEGACY COMPAT: regression-sensitive behavior. Do not change without runtime attack validation.
     }
+
     return ret;
 }
 
-void ReHookRecvFrom()
+bool ReHookRecvFrom()
 {
-    if (!g_recvfrom_hooked)
+    if (g_recvfromHooked)
+        return true;
+
+    if (!g_pVCR || !g_pVCR->Hook_recvfrom)
     {
-        g_real_recvfrom_ptr = g_pVCR->Hook_recvfrom;
-        g_pVCR->Hook_recvfrom = &MyRecvFromHook;
-        g_recvfrom_hooked = true;
-        META_CONPRINT("[-] DoS Attack Protect - Enable\n");
+        META_CONPRINT("[DoS Protect] ERROR: VCR recvfrom hook target is unavailable.\n");
+        return false;
     }
+
+    if (g_pVCR->Hook_recvfrom == &MyRecvFromHook)
+    {
+        META_CONPRINT("[DoS Protect] ERROR: recvfrom already points to this plugin while internal state is unhooked.\n");
+        return false;
+    }
+
+    g_realRecvFrom = g_pVCR->Hook_recvfrom;
+    g_pVCR->Hook_recvfrom = &MyRecvFromHook;
+    g_recvfromHooked = true;
+
+    META_CONPRINTF("[DoS Protect] Protection enabled for %s (LEGACY-25).\n", kGameName);
+    return true;
 }
 
-void ClearDosAddrList()
+void UnHookRecvFrom()
 {
-    SourceHook::List<DoSCount *>::iterator iter;
-    DoSCount *pInfo;
-    for (iter = m_pDoSAddr.begin(); iter != m_pDoSAddr.end(); iter++)
+    if (!g_recvfromHooked)
+        return;
+
+    if (g_pVCR && g_pVCR->Hook_recvfrom == &MyRecvFromHook)
     {
-        pInfo = (*iter);
-        delete pInfo;
+        g_pVCR->Hook_recvfrom = g_realRecvFrom;
     }
-    m_pDoSAddr.clear();
+    else
+    {
+        META_CONPRINT("[DoS Protect] WARNING: recvfrom hook chain changed; refusing to overwrite another hook on unload/disable.\n");
+    }
+
+    g_recvfromHooked = false;
+    g_realRecvFrom = nullptr;
+    META_CONPRINT("[DoS Protect] Protection disabled.\n");
 }
 
 void dosp_status_CommandCallback()
 {
-    if (g_recvfrom_hooked)
-    {
-        META_CONPRINT("[-] DoS Attack Protect - Enable\n");
-    }
-    else
-    {
-        META_CONPRINT("[-] DoS Attack Protect - Disable\n");
-    }
+    const TimePoint now = Clock::now();
+    RollPpsWindow(now);
+    MaybeExpireRecords(now);
 
-    META_CONPRINT(" Attacker IP\t|\tPacket\n--------------------------------\n");
-    SourceHook::List<DoSCount *>::iterator iter;
-    DoSCount *pInfo;
-    for (iter = m_pDoSAddr.begin(); iter != m_pDoSAddr.end(); iter++)
-    {
-        pInfo = (*iter);
-        META_CONPRINTF(" %d.%d.%d.%d\t|\t%d\n", pInfo->ip[0], pInfo->ip[1], pInfo->ip[2], pInfo->ip[3], pInfo->count);
-    }
-    META_CONPRINT("--------------------------------\n");
+    META_CONPRINT("\n========== DoS Protect ==========\n");
+    META_CONPRINTF(" Version: %s\n", DOSP_VERSION);
+    META_CONPRINTF(" Game: %s\n", kGameName);
+    META_CONPRINTF(" Binary: %s\n", kBinaryName);
+    META_CONPRINTF(" Status: %s\n", g_recvfromHooked ? "ENABLED" : "DISABLED");
+    META_CONPRINT(" Compatibility: LEGACY-25\n");
+    META_CONPRINTF(" Total zero UDP intercepted: %llu\n", static_cast<unsigned long long>(g_stats.totalIntercepted));
+    META_CONPRINTF(" Tracked sources: %llu / %d\n", static_cast<unsigned long long>(g_attackers.size()), g_effectiveMaxSources);
+    META_CONPRINTF(" Invalid/unavailable source packets: %llu\n", static_cast<unsigned long long>(g_stats.invalidSourcePackets));
+    META_CONPRINTF(" Packets not tracked because table was full: %llu\n", static_cast<unsigned long long>(g_stats.untrackedSourcePackets));
+    META_CONPRINTF(" Expired source records: %llu\n", static_cast<unsigned long long>(g_stats.expiredRecords));
+    META_CONPRINTF(" Current window packets: %llu\n", static_cast<unsigned long long>(g_stats.currentWindowPackets));
+    META_CONPRINTF(" Last PPS: %llu\n", static_cast<unsigned long long>(g_stats.lastPps));
+    META_CONPRINTF(" Peak PPS: %llu\n", static_cast<unsigned long long>(g_stats.peakPps));
+    META_CONPRINTF(" Source expiry: %d sec%s\n", g_effectiveExpireSeconds, g_effectiveExpireSeconds == 0 ? " (disabled)" : "");
+    META_CONPRINT("---------------------------------\n");
+    PrintTopSources(kStatusTopLimit);
+    META_CONPRINT("=================================\n\n");
 }
 
-#if SOURCE_ENGINE >= 3
-void OnDoSPEnableChange(ConVar *var, const char *pOldValue, float flOldValue)
+void dosp_top_CommandCallback()
 {
-    if (var != pConVar_dosp_enable)
-        return;
-#else
-void OnDoSPEnableChange(ConVar *var, char const *pOldValue)
+    META_CONPRINTF("\n[DoS Protect] Top %llu sources:\n", static_cast<unsigned long long>(kTopCommandLimit));
+    PrintTopSources(kTopCommandLimit);
+    META_CONPRINT("\n");
+}
+
+void dosp_reset_CommandCallback()
 {
-#endif
-    if (strcmp(var->GetString(), pOldValue) == 0)
+    ResetTelemetry();
+    META_CONPRINT("[DoS Protect] Telemetry and tracked source table reset. Protection state unchanged.\n");
+}
+
+void OnDoSPConVarChange(ConVar *var, const char *pOldValue, float flOldValue)
+{
+    (void)flOldValue;
+
+    if (!var)
         return;
 
-    if (var->GetInt() == 1)
+    if (var == g_dospEnable)
     {
-        ReHookRecvFrom();
+        if (pOldValue && std::strcmp(var->GetString(), pOldValue) == 0)
+            return;
+
+        if (var->GetInt() != 0)
+        {
+            ReHookRecvFrom();
+        }
+        else
+        {
+            UnHookRecvFrom();
+        }
+        return;
     }
-    else
+
+    if (var == g_dospMaxSources || var == g_dospExpireSeconds)
     {
-        UnHookRecvFrom();
+        RefreshRuntimeConfig();
     }
 }
+} // namespace
+
+DoSProtect g_DoSProtect;
+PLUGIN_EXPOSE(DoSProtect, g_DoSProtect);
 
 bool DoSProtect::Load(PluginId id, ISmmAPI *ismm, char *error, size_t maxlen, bool late)
 {
+    (void)id;
+    (void)late;
+
     PLUGIN_SAVEVARS();
 
-    ReHookRecvFrom();
+    GET_V_IFACE_CURRENT(GetEngineFactory, g_icvar, ICvar, CVAR_INTERFACE_VERSION);
+    g_pCVar = g_icvar;
 
-    new ConVar("dosp_version", DOSP_VERSION, FCVAR_SPONLY | FCVAR_REPLICATED | FCVAR_NOTIFY, "DoS Protect Version");
-    new ConCommand("dosp_status", dosp_status_CommandCallback, "", 0);
+    new ConVar("dosp_version", DOSP_VERSION, FCVAR_SPONLY | FCVAR_REPLICATED | FCVAR_NOTIFY, "DoS Protect version");
+    g_dospEnable = new ConVar("dosp_enable", "1", 0, "1 = enable DoS Protect, 0 = disable DoS Protect");
+    g_dospMaxSources = new ConVar("dosp_max_sources", "4096", 0, "Maximum IPv4 source records retained in memory (effective range 128-65536)");
+    g_dospExpireSeconds = new ConVar("dosp_expire_seconds", "900", 0, "Expire inactive source records after N seconds; 0 disables expiry");
 
-#if SOURCE_ENGINE >= 3
-    GET_V_IFACE_CURRENT(GetEngineFactory, icvar, ICvar, CVAR_INTERFACE_VERSION);
-    g_pCVar = icvar;
-    pConVar_dosp_enable = new ConVar("dosp_enable", "1", 0, "1 = Enable DoS Protect (default), 0 = Disable DoS Protect");
-    SH_ADD_HOOK_STATICFUNC(ICvar, CallGlobalChangeCallback, icvar, OnDoSPEnableChange, false);
+    new ConCommand("dosp_status", dosp_status_CommandCallback, "Show DoS Protect status and telemetry", 0);
+    new ConCommand("dosp_top", dosp_top_CommandCallback, "Show the top tracked UDP sources", 0);
+    new ConCommand("dosp_reset", dosp_reset_CommandCallback, "Reset DoS Protect telemetry without changing protection state", 0);
+
+    SH_ADD_HOOK_STATICFUNC(ICvar, CallGlobalChangeCallback, g_icvar, OnDoSPConVarChange, false);
     ConVar_Register(0, this);
-#else
-    new ConVar("dosp_enable", "1", 0, "1 = Enable DoS Protect (default), 0 = Disable DoS Protect", OnDoSPEnableChange);
-    ConCommandBaseMgr::OneTimeInit(this);
-#endif
 
+    RefreshRuntimeConfig();
+    ResetTelemetry();
+
+    if (g_dospEnable->GetInt() != 0 && !ReHookRecvFrom())
+    {
+        if (error && maxlen > 0)
+        {
+            std::snprintf(error, maxlen, "DoS Protect could not hook g_pVCR->Hook_recvfrom for %s", kGameName);
+        }
+        return false;
+    }
+
+    META_CONPRINTF("[DoS Protect] %s loaded for %s.\n", DOSP_VERSION, kGameName);
     return true;
 }
 
 bool DoSProtect::Unload(char *error, size_t maxlen)
 {
-#if SOURCE_ENGINE >= 3
-    SH_REMOVE_HOOK_STATICFUNC(ICvar, CallGlobalChangeCallbacks, icvar, OnDoSPEnableChange, false);
-#endif
+    (void)error;
+    (void)maxlen;
+
+    if (g_icvar)
+    {
+        SH_REMOVE_HOOK_STATICFUNC(ICvar, CallGlobalChangeCallback, g_icvar, OnDoSPConVarChange, false);
+    }
 
     UnHookRecvFrom();
-    ClearDosAddrList();
+    g_attackers.clear();
+    g_attackers.rehash(0);
+
+    META_CONPRINT("[DoS Protect] Unloaded.\n");
     return true;
 }
 
@@ -210,7 +523,7 @@ const char *DoSProtect::GetAuthor()
 
 const char *DoSProtect::GetDescription()
 {
-    return "L4D/L4D2 DoS protection revamp; based on the original DoS Protect by ZombieX2.net";
+    return "L4D/L4D2 UDP DoS protection revamp; original concept/source credited to ZombieX2.net";
 }
 
 const char *DoSProtect::GetName()
