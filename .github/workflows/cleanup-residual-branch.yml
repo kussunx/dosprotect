@@ -1,0 +1,25 @@
+name: Cleanup residual branch
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    name: Remove residual branch
+    runs-on: self-hosted
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Delete residual branch
+        shell: cmd
+        run: git push origin --delete "dual-target-support" || echo Branch was already removed.
