@@ -1,0 +1,108 @@
+name: Build Accelerator SM7456 Hosted
+
+on:
+  push:
+    branches: ["build/accelerator-sm7456"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Accelerator 2.7.1 / L4D1 Win32 / SM7456 API10
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v5
+
+      - name: Checkout Accelerator
+        uses: actions/checkout@v5
+        with:
+          repository: MrPanica/accelerator
+          ref: master
+          fetch-depth: 0
+          submodules: recursive
+          path: accelerator
+
+      - name: Checkout SourceMod API10 SDK
+        uses: actions/checkout@v5
+        with:
+          repository: alliedmodders/sourcemod
+          ref: 73fd660ff44ac89348125e80c8816cc76fee5d60
+          fetch-depth: 1
+          submodules: recursive
+          path: sourcemod
+
+      - name: Checkout AMBuild
+        uses: actions/checkout@v5
+        with:
+          repository: alliedmodders/ambuild
+          ref: 2d4620da4cdaf89cf25afc3577f920e6138ae7cd
+          path: ambuild
+
+      - name: Verify API10 SDK
+        shell: powershell
+        run: |
+          $header = Get-Content .\sourcemod\public\IExtensionSys.h -Raw
+          if ($header -notmatch 'SMINTERFACE_EXTENSIONAPI_VERSION_MIN\s+10') { throw 'Expected API10 minimum' }
+          if ($header -notmatch 'SMINTERFACE_EXTENSIONAPI_VERSION\s+10') { throw 'Expected API10 current version' }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install AMBuild
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install .\ambuild
+
+      - name: Build native extension x86
+        shell: powershell
+        run: |
+          $sm = (Resolve-Path .\sourcemod).Path
+          New-Item -ItemType Directory -Force -Path .\accelerator\build | Out-Null
+          Push-Location .\accelerator\build
+          python ..\configure.py --sm-path="$sm" --enable-optimize --targets=x86
+          if ($LASTEXITCODE -ne 0) { throw "configure.py failed: $LASTEXITCODE" }
+          ambuild
+          if ($LASTEXITCODE -ne 0) { throw "ambuild failed: $LASTEXITCODE" }
+          Pop-Location
+
+      - name: Compile SourcePawn helper using exact SM7456 compiler
+        shell: powershell
+        run: |
+          Invoke-WebRequest -Uri 'https://www.sourcemod.net/smdrop/1.13/sourcemod-1.13.0-git7456-windows.zip' -OutFile .\sm7456.zip
+          Expand-Archive .\sm7456.zip .\sm7456 -Force
+          $spcomp = Get-ChildItem .\sm7456 -Recurse -File | Where-Object { $_.Name -match '^spcomp.*\.exe$' } | Select-Object -First 1
+          if (-not $spcomp) { throw 'spcomp missing from SM7456 archive' }
+          $smInclude = Join-Path $spcomp.Directory.FullName 'include'
+          New-Item -ItemType Directory -Force .\compiled | Out-Null
+          & $spcomp.FullName .\accelerator\scripting\accelerator_local.sp -i .\accelerator\scripting\include -i $smInclude -o .\compiled\accelerator_local.smx
+          if ($LASTEXITCODE -ne 0) { throw "spcomp failed: $LASTEXITCODE" }
+
+      - name: Package clean L4D1 runtime
+        shell: powershell
+        run: |
+          $stage = '.\stage'
+          New-Item -ItemType Directory -Force "$stage\addons\sourcemod\extensions" | Out-Null
+          New-Item -ItemType Directory -Force "$stage\addons\sourcemod\gamedata" | Out-Null
+          New-Item -ItemType Directory -Force "$stage\addons\sourcemod\plugins" | Out-Null
+          $dll = Get-ChildItem .\accelerator\build -Recurse -Filter accelerator.ext.dll -File | Where-Object { $_.FullName -notmatch '\\x64\\' } | Select-Object -First 1
+          if (-not $dll) { throw 'x86 accelerator.ext.dll not found' }
+          Copy-Item $dll.FullName "$stage\addons\sourcemod\extensions\accelerator.ext.dll"
+          Copy-Item .\accelerator\extension\accelerator.autoload "$stage\addons\sourcemod\extensions\accelerator.autoload"
+          Copy-Item .\accelerator\gamedata\* "$stage\addons\sourcemod\gamedata\" -Recurse
+          Copy-Item .\compiled\accelerator_local.smx "$stage\addons\sourcemod\plugins\accelerator_local.smx"
+          Compress-Archive -Path "$stage\addons" -DestinationPath .\accelerator-2.7.1-l4d1-win32-sm1.13.0.7456-api10.zip -CompressionLevel Optimal
+
+      - name: Upload runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: accelerator-2.7.1-l4d1-win32-sm7456-api10
+          path: accelerator-2.7.1-l4d1-win32-sm1.13.0.7456-api10.zip
+          if-no-files-found: error
+          retention-days: 14
