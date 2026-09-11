@@ -75,7 +75,6 @@ jobs:
           -#endif
                        );
           '@
-          $patch = ($patch -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`n"
           [System.IO.File]::WriteAllText($patchPath, $patch + "`n", $utf8NoBom)
 
           $patchScript = '.\accelerator\third_party\Patch'
