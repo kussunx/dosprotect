@@ -49,45 +49,53 @@ jobs:
           $header = Get-Content .\sourcemod\public\IExtensionSys.h -Raw
           if ($header -notmatch 'SMINTERFACE_EXTENSIONAPI_VERSION_MIN\s+10') { throw 'Expected API10 minimum' }
           if ($header -notmatch 'SMINTERFACE_EXTENSIONAPI_VERSION\s+10') { throw 'Expected API10 current version' }
+          Write-Host 'Verified exact SourceMod Extension API 10 SDK.'
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Add Breakpad VS2026 compatibility patch
+      - name: Generate Breakpad VS2026 compatibility patch
         shell: powershell
         run: |
           $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-          $patchPath = '.\accelerator\patches\0007-Fix-VS2026-checked-array-iterator.patch'
-          $patch = @'
-          diff --git a/src/client/windows/crash_generation/minidump_generator.cc b/src/client/windows/crash_generation/minidump_generator.cc
-          --- a/src/client/windows/crash_generation/minidump_generator.cc
-          +++ b/src/client/windows/crash_generation/minidump_generator.cc
-          @@ -180,10 +180,4 @@
-             std::copy(operations_.begin(),
-                       operations_.end(),
-          -#if defined(_MSC_VER) && !defined(_LIBCPP_STD_VER)
-          -            stdext::checked_array_iterator<AVRF_HANDLE_OPERATION*>(
-          -                reinterpret_cast<AVRF_HANDLE_OPERATION*>(stream_data + 1),
-          -                operations_.size())
-          -#else
-                       reinterpret_cast<AVRF_HANDLE_OPERATION*>(stream_data + 1)
-          -#endif
-                       );
+          $bpRoot = (Resolve-Path '.\accelerator\third_party\breakpad').Path
+          $relative = 'src/client/windows/crash_generation/minidump_generator.cc'
+          $source = Join-Path $bpRoot $relative
+          $content = [System.IO.File]::ReadAllText($source).Replace("`r`n", "`n")
+          $old = @'
+          #if defined(_MSC_VER) && !defined(_LIBCPP_STD_VER)
+                      stdext::checked_array_iterator<AVRF_HANDLE_OPERATION*>(
+                          reinterpret_cast<AVRF_HANDLE_OPERATION*>(stream_data + 1),
+                          operations_.size())
+          #else
+                      reinterpret_cast<AVRF_HANDLE_OPERATION*>(stream_data + 1)
+          #endif
           '@
-          [System.IO.File]::WriteAllText($patchPath, $patch + "`n", $utf8NoBom)
+          $old = $old.Replace("`r`n", "`n")
+          $new = '            reinterpret_cast<AVRF_HANDLE_OPERATION*>(stream_data + 1)'
+          if (-not $content.Contains($old)) {
+            throw 'Expected checked_array_iterator block was not found in Breakpad.'
+          }
+          [System.IO.File]::WriteAllText($source, $content.Replace($old, $new), $utf8NoBom)
+
+          $patchPath = (Resolve-Path '.\accelerator\patches').Path + '\0007-Fix-VS2026-checked-array-iterator.patch'
+          Push-Location $bpRoot
+          git diff --output="$patchPath" -- $relative
+          if ($LASTEXITCODE -ne 0) { throw 'git diff failed while generating Breakpad patch' }
+          git checkout -- $relative
+          if ($LASTEXITCODE -ne 0) { throw 'Could not restore pristine Breakpad source' }
+          git apply --check "$patchPath"
+          if ($LASTEXITCODE -ne 0) { throw 'Generated Breakpad VS2026 patch does not apply cleanly' }
+          Pop-Location
 
           $patchScript = '.\accelerator\third_party\Patch'
-          $content = [System.IO.File]::ReadAllText($patchScript)
+          $patchList = [System.IO.File]::ReadAllText($patchScript)
           $needle = '  "0006-Fix-multipart-missing-CRLF.patch"'
-          if (-not $content.Contains($needle)) { throw 'Could not locate Accelerator patch list anchor' }
+          if (-not $patchList.Contains($needle)) { throw 'Could not locate Accelerator patch list anchor' }
           $replacement = '  "0006-Fix-multipart-missing-CRLF.patch",' + "`n" + '  "0007-Fix-VS2026-checked-array-iterator.patch"'
-          [System.IO.File]::WriteAllText($patchScript, $content.Replace($needle, $replacement), $utf8NoBom)
-
-          Push-Location .\accelerator\third_party\breakpad
-          git apply --check ..\..\patches\0007-Fix-VS2026-checked-array-iterator.patch
-          if ($LASTEXITCODE -ne 0) { throw 'Breakpad VS2026 patch does not apply cleanly' }
-          Pop-Location
+          [System.IO.File]::WriteAllText($patchScript, $patchList.Replace($needle, $replacement), $utf8NoBom)
+          Write-Host 'Generated and validated Breakpad VS2026 patch.'
 
       - name: Install AMBuild
         shell: powershell
@@ -123,6 +131,7 @@ jobs:
         shell: powershell
         run: |
           $stage = '.\stage'
+          Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force "$stage\addons\sourcemod\extensions" | Out-Null
           New-Item -ItemType Directory -Force "$stage\addons\sourcemod\gamedata" | Out-Null
           New-Item -ItemType Directory -Force "$stage\addons\sourcemod\plugins" | Out-Null
