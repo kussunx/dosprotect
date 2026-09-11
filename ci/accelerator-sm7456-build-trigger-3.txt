@@ -1,0 +1,1 @@
+Trigger Accelerator SM7456 build using git-generated Breakpad VS2026 patch.
