@@ -1,0 +1,143 @@
+name: Build Accelerator for SM 1.13.0.7456
+
+on:
+  push:
+    branches: ["build/accelerator-sm7456"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: accelerator-sm7456
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Accelerator 2.7.1 / L4D1 Windows x86 / SM7456 API10
+    runs-on: self-hosted
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v5
+
+      - name: Checkout Accelerator
+        uses: actions/checkout@v5
+        with:
+          repository: MrPanica/accelerator
+          ref: master
+          fetch-depth: 0
+          submodules: recursive
+          path: accelerator
+
+      - name: Checkout SourceMod API10 SDK
+        uses: actions/checkout@v5
+        with:
+          repository: alliedmodders/sourcemod
+          ref: 73fd660ff44ac89348125e80c8816cc76fee5d60
+          fetch-depth: 1
+          submodules: recursive
+          path: sourcemod
+
+      - name: Checkout AMBuild
+        uses: actions/checkout@v5
+        with:
+          repository: alliedmodders/ambuild
+          ref: 2d4620da4cdaf89cf25afc3577f920e6138ae7cd
+          path: ambuild
+
+      - name: Verify exact Extension API
+        shell: powershell
+        run: |
+          $header = Get-Content .\sourcemod\public\IExtensionSys.h -Raw
+          if ($header -notmatch 'SMINTERFACE_EXTENSIONAPI_VERSION_MIN\s+10') { throw 'SourceMod SDK does not require Extension API 10' }
+          if ($header -notmatch 'SMINTERFACE_EXTENSIONAPI_VERSION\s+10') { throw 'SourceMod SDK does not build Extension API 10' }
+          Write-Host 'Verified SourceMod Extension API 10.'
+
+      - name: Verify toolchain
+        shell: powershell
+        run: |
+          python --version
+          git --version
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          }
+
+      - name: Install AMBuild
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install .\ambuild
+          ambuild --version
+
+      - name: Build Accelerator Release x86
+        shell: powershell
+        run: |
+          $sm = (Resolve-Path .\sourcemod).Path
+          New-Item -ItemType Directory -Force -Path .\accelerator\build | Out-Null
+          Push-Location .\accelerator\build
+          python ..\configure.py --sm-path="$sm" --enable-optimize --targets=x86
+          if ($LASTEXITCODE -ne 0) { throw "configure.py failed with exit code $LASTEXITCODE" }
+          ambuild
+          if ($LASTEXITCODE -ne 0) { throw "ambuild failed with exit code $LASTEXITCODE" }
+          Pop-Location
+
+      - name: Compile accelerator_local with SourceMod 1.13.0.7456
+        shell: powershell
+        run: |
+          $url = 'https://www.sourcemod.net/smdrop/1.13/sourcemod-1.13.0-git7456-windows.zip'
+          Invoke-WebRequest -Uri $url -OutFile .\sm7456.zip
+          Expand-Archive -Path .\sm7456.zip -DestinationPath .\sm7456 -Force
+          $spcomp = Get-ChildItem .\sm7456 -Recurse -File | Where-Object { $_.Name -match '^spcomp.*\.exe$' } | Select-Object -First 1
+          if (-not $spcomp) { throw 'spcomp was not found in SourceMod 1.13.0.7456 package' }
+          $smInclude = Join-Path $spcomp.Directory.FullName 'include'
+          New-Item -ItemType Directory -Force -Path .\compiled | Out-Null
+          & $spcomp.FullName .\accelerator\scripting\accelerator_local.sp -i .\accelerator\scripting\include -i $smInclude -o .\compiled\accelerator_local.smx
+          if ($LASTEXITCODE -ne 0) { throw "spcomp failed with exit code $LASTEXITCODE" }
+
+      - name: Create clean L4D1 runtime package
+        shell: powershell
+        run: |
+          $stage = '.\stage'
+          Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$stage\addons\sourcemod\extensions" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage\addons\sourcemod\gamedata" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage\addons\sourcemod\plugins" | Out-Null
+
+          $dll = Get-ChildItem .\accelerator\build -Recurse -Filter accelerator.ext.dll -File | Where-Object { $_.FullName -notmatch '\\x64\\' } | Select-Object -First 1
+          if (-not $dll) { throw 'accelerator.ext.dll (x86) was not produced' }
+          Copy-Item $dll.FullName "$stage\addons\sourcemod\extensions\accelerator.ext.dll"
+          Copy-Item .\accelerator\extension\accelerator.autoload "$stage\addons\sourcemod\extensions\accelerator.autoload"
+          Copy-Item .\accelerator\gamedata\* "$stage\addons\sourcemod\gamedata\" -Recurse
+          Copy-Item .\compiled\accelerator_local.smx "$stage\addons\sourcemod\plugins\accelerator_local.smx"
+
+          $zip = '.\accelerator-2.7.1-l4d1-win32-sm1.13.0.7456-api10.zip'
+          Remove-Item $zip -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$stage\addons" -DestinationPath $zip -CompressionLevel Optimal
+          Write-Host "Package: $zip"
+          Get-ChildItem $stage -Recurse -File | ForEach-Object { $_.FullName.Substring((Resolve-Path $stage).Path.Length + 1) }
+
+      - name: Collect symbols
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path .\symbols | Out-Null
+          $pdb = Get-ChildItem .\accelerator\build -Recurse -Filter accelerator.ext.pdb -File | Where-Object { $_.FullName -notmatch '\\x64\\' } | Select-Object -First 1
+          if ($pdb) { Copy-Item $pdb.FullName .\symbols\accelerator.ext.pdb }
+
+      - name: Upload L4D1 runtime package
+        uses: actions/upload-artifact@v4
+        with:
+          name: accelerator-2.7.1-l4d1-win32-sm7456-api10
+          path: accelerator-2.7.1-l4d1-win32-sm1.13.0.7456-api10.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload PDB symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: accelerator-2.7.1-l4d1-win32-sm7456-api10-symbols
+          path: symbols/accelerator.ext.pdb
+          if-no-files-found: warn
+          retention-days: 14
