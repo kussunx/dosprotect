@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     name: Accelerator 2.7.1 / L4D1 Windows x86 / SM7456 API10
-    runs-on: self-hosted
+    runs-on: windows-latest
     timeout-minutes: 30
 
     steps:
@@ -54,6 +54,11 @@ jobs:
           if ($header -notmatch 'SMINTERFACE_EXTENSIONAPI_VERSION_MIN\s+10') { throw 'SourceMod SDK does not require Extension API 10' }
           if ($header -notmatch 'SMINTERFACE_EXTENSIONAPI_VERSION\s+10') { throw 'SourceMod SDK does not build Extension API 10' }
           Write-Host 'Verified SourceMod Extension API 10.'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
       - name: Verify toolchain
         shell: powershell
