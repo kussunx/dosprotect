@@ -54,6 +54,42 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Add Breakpad VS2026 compatibility patch
+        shell: powershell
+        run: |
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          $patchPath = '.\accelerator\patches\0007-Fix-VS2026-checked-array-iterator.patch'
+          $patch = @'
+          diff --git a/src/client/windows/crash_generation/minidump_generator.cc b/src/client/windows/crash_generation/minidump_generator.cc
+          --- a/src/client/windows/crash_generation/minidump_generator.cc
+          +++ b/src/client/windows/crash_generation/minidump_generator.cc
+          @@ -180,10 +180,4 @@
+             std::copy(operations_.begin(),
+                       operations_.end(),
+          -#if defined(_MSC_VER) && !defined(_LIBCPP_STD_VER)
+          -            stdext::checked_array_iterator<AVRF_HANDLE_OPERATION*>(
+          -                reinterpret_cast<AVRF_HANDLE_OPERATION*>(stream_data + 1),
+          -                operations_.size())
+          -#else
+                       reinterpret_cast<AVRF_HANDLE_OPERATION*>(stream_data + 1)
+          -#endif
+                       );
+          '@
+          $patch = ($patch -split "`r?`n" | ForEach-Object { $_ -replace '^          ', '' }) -join "`n"
+          [System.IO.File]::WriteAllText($patchPath, $patch + "`n", $utf8NoBom)
+
+          $patchScript = '.\accelerator\third_party\Patch'
+          $content = [System.IO.File]::ReadAllText($patchScript)
+          $needle = '  "0006-Fix-multipart-missing-CRLF.patch"'
+          if (-not $content.Contains($needle)) { throw 'Could not locate Accelerator patch list anchor' }
+          $replacement = '  "0006-Fix-multipart-missing-CRLF.patch",' + "`n" + '  "0007-Fix-VS2026-checked-array-iterator.patch"'
+          [System.IO.File]::WriteAllText($patchScript, $content.Replace($needle, $replacement), $utf8NoBom)
+
+          Push-Location .\accelerator\third_party\breakpad
+          git apply --check ..\..\patches\0007-Fix-VS2026-checked-array-iterator.patch
+          if ($LASTEXITCODE -ne 0) { throw 'Breakpad VS2026 patch does not apply cleanly' }
+          Pop-Location
+
       - name: Install AMBuild
         shell: powershell
         run: |
